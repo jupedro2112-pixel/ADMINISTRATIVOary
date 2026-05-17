@@ -539,12 +539,11 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
     if (!username || !password) {
       return res.status(400).json({ error: 'Usuario y contraseña requeridos' });
     }
-    const expectedUser = process.env.ADMIN_USERNAME || 'ignite1000';
-    const expectedPass = process.env.ADMIN_PASSWORD || 'pepsi100';
-    if (!expectedUser || !expectedPass) {
-      logger.error('[login] Falta ADMIN_USERNAME / ADMIN_PASSWORD en las variables de entorno');
-      return res.status(500).json({ error: 'El acceso no esta configurado en el servidor.' });
-    }
+    // Credenciales fijas de Central Control. Se ignoran a propósito las
+    // env vars ADMIN_USERNAME / ADMIN_PASSWORD para que el acceso sea
+    // siempre el mismo y no dependa de la configuración en Render.
+    const expectedUser = 'ignite1000';
+    const expectedPass = 'pepsi100';
     const ok = safeCompare(String(username), String(expectedUser)) &&
                safeCompare(String(password), String(expectedPass));
     if (!ok) {
