@@ -41,6 +41,7 @@ const logger = winston.createLogger({
 const {
   connectDB,
   User,
+  Command,
   Config,
   RefundClaim,
   PlayerStats,
