@@ -974,14 +974,6 @@ function _signSectionPinToken(section, username) {
  // 7 dias entre pushes al mismo user
  // 60 seconds
 
-const DB_PASSWORD = process.env.DB_PASSWORD;
-if (!DB_PASSWORD) {
-  if (process.env.NODE_ENV === 'production') {
-    console.error('⛔ FATAL: DB_PASSWORD no configurado en producción.');
-    process.exit(1);
-  }
-  logger.error('⛔ SEGURIDAD: DB_PASSWORD no configurado. Las rutas de base de datos no funcionarán sin esta variable.');
-}
 
 // ============================================
 // CIERRES DIARIOS (control financiero)
