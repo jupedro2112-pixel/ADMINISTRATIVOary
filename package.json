@@ -1,7 +1,7 @@
 {
   "name": "sala-de-juegos-backend",
   "version": "2.0.0",
-  "description": "Backend profesional para Sala de Juegos Chat con MongoDB - Arquitectura refactorizada",
+  "description": "Backend de la herramienta administrativa de Cierres (cierres, cotizaciones, empleados, códigos) con MongoDB",
   "main": "server.js",
   "scripts": {
     "start": "NODE_ENV=production node server.js",
@@ -10,10 +10,7 @@
     "lint": "eslint src/"
   },
   "dependencies": {
-    "@aws-sdk/client-sns": "^3.1030.0",
     "@aws-sdk/client-ssm": "^3.1032.0",
-    "@socket.io/redis-adapter": "^8.3.0",
-    "axios": "^1.6.0",
     "bcryptjs": "^2.4.3",
     "compression": "^1.7.4",
     "cors": "^2.8.5",
@@ -22,22 +19,11 @@
     "express-mongo-sanitize": "^2.2.0",
     "express-rate-limit": "^7.1.0",
     "firebase-admin": "^12.0.0",
-    "form-data": "^4.0.5",
-    "helmet": "^7.1.0",
-    "hpp": "^0.2.3",
-    "https-proxy-agent": "^7.0.2",
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.0.0",
-    "redis": "^5.11.0",
-    "socket.io": "^4.7.2",
     "uuid": "^9.0.0",
     "winston": "^3.11.0",
-    "xlsx": "^0.18.5",
     "xss-clean": "^0.1.4"
-  },
-  "optionalDependencies": {
-    "@aws-sdk/client-s3": "^3.600.0",
-    "@aws-sdk/s3-request-presigner": "^3.600.0"
   },
   "devDependencies": {
     "eslint": "^8.54.0",
