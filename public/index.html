@@ -5,9 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="theme-color" content="#1a0033">
     <meta name="robots" content="noindex, nofollow, noarchive">
-    <title>Panel Admin · Sala de Juegos</title>
-    <link rel="stylesheet" href="/adminprivado2026/admin.css">
-    <link rel="manifest" href="/adminprivado2026/manifest.json">
+    <title>Central Control</title>
+    <link rel="stylesheet" href="/admin.css">
+    <link rel="manifest" href="/manifest.json">
     <style>
         /* Modo "vista reducida" — activo cuando la URL trae ?only=<seccion>.
            Oculta el sidebar y el área queda full-width, así el link se puede
@@ -48,8 +48,8 @@
             <div class="login-logo">
                 <span class="icon icon-gamepad"></span>
                 <div style="color:#ffd700;font-weight:900;font-size:14px;letter-spacing:2px;text-transform:uppercase;margin-bottom:4px;text-shadow:0 0 14px rgba(255,215,0,0.55);animation:adminWelcomePulse 2s ease-in-out infinite;">👋 Bienvenido</div>
-                <h1>Panel de Administración</h1>
-                <p style="color:#aaa;font-size:11.5px;letter-spacing:0.5px;">Sala de Juegos · VIPCARGASANTINO</p>
+                <h1>Central Control</h1>
+                <p style="color:#aaa;font-size:11.5px;letter-spacing:0.5px;">Acceso administrativo</p>
             </div>
             <style>@keyframes adminWelcomePulse { 0%,100% { opacity:1; transform:scale(1); } 50% { opacity:0.75; transform:scale(0.97); } }</style>
             <form id="loginForm" class="login-form">
@@ -75,7 +75,7 @@
         <aside class="sidebar">
             <div class="sidebar-header">
                 <span class="icon icon-gamepad"></span>
-                <span>Admin Panel</span>
+                <span>Central Control</span>
             </div>
             <nav class="sidebar-nav">
                 <!-- CIERRES (financiero) — al tope porque es lo que más se usa.
@@ -102,7 +102,7 @@
                     <span>📋</span>
                     <span>Historial Cotización</span>
                 </a>
-                <a href="#" class="nav-item" data-section="empleados" data-protected-pin="closings" style="background:rgba(155,48,255,0.10);border-left:3px solid #9b30ff;">
+                <a href="#" class="nav-item" data-section="empleados" data-protected-pin="empleados" style="background:rgba(155,48,255,0.10);border-left:3px solid #9b30ff;">
                     <span>👥</span>
                     <span><strong>EMPLEADOS</strong></span>
                 </a>
@@ -411,6 +411,6 @@
 
     <!-- SheetJS para parsear .xlsx en el navegador (recontactación) -->
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-    <script src="/adminprivado2026/admin.js"></script>
+    <script src="/admin.js"></script>
 </body>
 </html>

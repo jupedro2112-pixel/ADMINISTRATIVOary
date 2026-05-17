@@ -401,7 +401,7 @@ function buildAdminSessionCookieHeaders(token) {
   const maxAge = 8 * 60 * 60; // 8 hours in seconds
   const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
   return [
-    `admin_session=${token}; HttpOnly; SameSite=Strict; Max-Age=${maxAge}; Path=/adminprivado2026${secure}`,
+    `admin_session=${token}; HttpOnly; SameSite=Strict; Max-Age=${maxAge}; Path=/${secure}`,
     `admin_api_session=${token}; HttpOnly; SameSite=Strict; Max-Age=${maxAge}; Path=/api${secure}`
   ];
 }
@@ -424,16 +424,9 @@ app.use((req, res, next) => {
   next();
 });
 
-// Catch-all: block every other path under /adminprivado2026/ (e.g. direct
-// access to /adminprivado2026/index.html, /adminprivado2026/manifest.json).
-// This runs BEFORE express.static so static never serves these files.
-app.use('/adminprivado2026/', adminHostCheck, (req, res) => {
-  res.status(404).send('Not found');
-});
-
-// Block direct file access under /cierresgeneral/.
-app.use('/cierresgeneral/', adminHostCheck, (req, res) => {
-  res.status(404).send('Not found');
+// La pagina principal sirve el panel Central Control.
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
 app.use(express.static(path.join(__dirname, 'public'), {
@@ -493,132 +486,15 @@ function _isVipUser(username) {
   return String(username || '').toLowerCase().trim().startsWith('vip');
 }
 
-const authMiddleware = async (req, res, next) => {
-  // Accept token from Authorization header first; fall back to admin_api_session
-  // httpOnly cookie (sent automatically by the browser for same-origin requests
-  // to /api/*).  This allows the admin panel to work purely via cookie without
-  // storing the JWT in localStorage.
+const authMiddleware = (req, res, next) => {
+  // Token desde el header Authorization, o desde la cookie httpOnly admin_api_session.
   let token = req.headers.authorization?.split(' ')[1];
-  if (!token) {
-    token = getAdminApiSessionCookie(req) || null;
-  }
-  
+  if (!token) token = getAdminApiSessionCookie(req) || null;
   if (!token) {
     return res.status(401).json({ error: 'Token no proporcionado' });
   }
-  
   try {
-    const decoded = jwt.verify(token, JWT_SECRET);
-    
-    // Buscar usuario por 'id' primero, luego por '_id' como fallback
-    let user = await User.findOne({ id: decoded.userId });
-    
-    if (!user) {
-      // Intentar buscar por _id (para usuarios migrados)
-      try {
-        user = await User.findById(decoded.userId);
-      } catch (e) {
-        // _id inválido, ignorar
-      }
-    }
-    
-    if (!user) {
-      return res.status(401).json({ error: 'Usuario no encontrado' });
-    }
-
-    if (!user.isActive) {
-      return res.status(401).json({ error: 'Usuario desactivado' });
-    }
-
-    if (user.isBlocked === true) {
-      return res.status(403).json({
-        error: 'Tu cuenta está bloqueada. Contactá a soporte.',
-        code: 'USER_BLOCKED',
-        reason: user.blockReason || null
-      });
-    }
-    
-    if (user.tokenVersion && decoded.tokenVersion !== user.tokenVersion) {
-      return res.status(401).json({ error: 'Sesión expirada. Por favor, vuelve a iniciar sesión.' });
-    }
-
-    // Bloqueo VIP: redirigimos a VIPCARGAS. Excluimos roles staff
-    // (admin/depositor/withdrawer) por si tienen username con prefijo vip.
-    const _vipExemptRoles = ['admin', 'depositor', 'withdrawer'];
-    if (_isVipUser(user.username) && !_vipExemptRoles.includes(user.role)) {
-      return res.status(403).json(VIP_BLOCK_RESPONSE);
-    }
-
-    // Bloqueo por fraude: rechazar token de cuenta flaggeada por intento
-    // de estafa (huella de dispositivo duplicada o multi-cuenta por
-    // dispositivo). Excluimos roles staff por las dudas, mismo criterio
-    // que VIP block.
-    if (user.fraudBlocked && !_vipExemptRoles.includes(user.role)) {
-      return res.status(403).json({
-        error: 'Usuario bloqueado por intento de estafa de bono.',
-        message: user.fraudReason || 'Cuenta bloqueada.',
-        code: 'FRAUD_BLOCKED',
-        fraudBlocked: true
-      });
-    }
-
-    req.user = decoded;
-
-    // Touch lastSeenApp en PlayerStats + upsert en DailyAppOpen del día actual.
-    // Fire-and-forget, no bloquea request. Solo para roles de jugador — los
-    // admins entrando al panel NO cuentan como actividad de usuario.
-    // Throttled a 1 update por minuto por user para no martillar Mongo en
-    // una sesion activa con muchas requests.
-    //
-    // DailyAppOpen guarda 1 row por (user, día ART). Cuando el reloj cruza
-    // al día siguiente, el row anterior queda inmutable — base perfecta
-    // para gráficos históricos de DAU sin perder data.
-    const isPlayerRole = !['admin', 'depositor', 'withdrawer'].includes(user.role || 'player');
-    if (isPlayerRole && user.username) {
-      const now = Date.now();
-      const lastTouchKey = '_lastSeenTouch_' + user.username.toLowerCase();
-      if (!global[lastTouchKey] || (now - global[lastTouchKey]) > 60_000) {
-        global[lastTouchKey] = now;
-        const unameLower = user.username.toLowerCase();
-        const nowDate = new Date();
-        // dayKey ART: restamos 3h al UTC y tomamos YYYY-MM-DD.
-        const ART_OFFSET_MS = 3 * 60 * 60 * 1000;
-        const dayKey = new Date(now - ART_OFFSET_MS).toISOString().slice(0, 10);
-        // No await — fire and forget.
-        PlayerStats.updateOne(
-          { username: unameLower },
-          {
-            $set: { lastSeenApp: nowDate },
-            $setOnInsert: { username: unameLower, userId: user.id || null }
-          },
-          { upsert: true }
-        ).catch((e) => logger.warn(`[lastSeenApp] failed for ${user.username}: ${e.message}`));
-        DailyAppOpen.updateOne(
-          { username: unameLower, dayKey },
-          {
-            $inc: { opens: 1 },
-            $set: { lastSeenAt: nowDate },
-            $setOnInsert: { username: unameLower, dayKey, firstSeenAt: nowDate }
-          },
-          { upsert: true }
-        ).catch((e) => logger.warn(`[DailyAppOpen] failed for ${user.username}: ${e.message}`));
-      }
-    }
-
-    // Mandatory password change: deshabilitado por requerimiento del cliente.
-    // Si el flag está seteado, lo limpiamos en caliente (self-heal universal)
-    // así nunca se vuelve a disparar el bloqueo. Antes solo los admins se
-    // auto-curaban; ahora aplica a cualquier rol.
-    if (user.mustChangePassword === true) {
-      try {
-        user.mustChangePassword = false;
-        await user.save();
-        logger.info(`[authMiddleware] Auto-cleared mustChangePassword for ${user.username} (role=${user.role})`);
-      } catch (e) {
-        logger.warn(`[authMiddleware] Failed to auto-clear mustChangePassword for ${user.username}: ${e.message}`);
-      }
-    }
-
+    req.user = jwt.verify(token, JWT_SECRET);
     next();
   } catch (error) {
     return res.status(401).json({ error: 'Token inválido' });
@@ -658,322 +534,44 @@ app.get('/api/health', async (req, res) => {
 // Login
 app.post('/api/auth/login', authLimiter, async (req, res) => {
   try {
-    const { username, phone, password } = req.body;
-
-    if (_isVipUser(username)) {
-      return res.status(403).json(VIP_BLOCK_RESPONSE);
+    const { username, password } = req.body || {};
+    if (!username || !password) {
+      return res.status(400).json({ error: 'Usuario y contraseña requeridos' });
     }
-
-
-    if ((!username && !phone) || !password) {
-      return res.status(400).json({ error: 'Usuario o teléfono, y contraseña requeridos' });
+    const expectedUser = process.env.ADMIN_USERNAME;
+    const expectedPass = process.env.ADMIN_PASSWORD;
+    if (!expectedUser || !expectedPass) {
+      logger.error('[login] Falta ADMIN_USERNAME / ADMIN_PASSWORD en las variables de entorno');
+      return res.status(500).json({ error: 'El acceso no esta configurado en el servidor.' });
     }
-    
-    logger.debug(`Login attempt for: ${username || phone}`);
-    
-    // Buscar usuario case-insensitive (para soportar usernames con mayúsculas/minúsculas)
-    let user;
-    let dbReadFailed = false;
-
-    if (phone && !username) {
-      // Phone-based login
-      const normalizedPhone = phone.trim();
-      try {
-        user = await User.findOne({ phone: normalizedPhone, phoneVerified: true });
-      } catch (dbErr) {
-        logger.error(`[Login] MongoDB read failed for phone ${normalizedPhone}: ${dbErr.message}`);
-        dbReadFailed = true;
-      }
-    } else {
-      // Username-based login
-      try {
-        user = await User.findOne({ 
-          username: { $regex: new RegExp('^' + escapeRegex(username) + '$', 'i') } 
-        });
-      } catch (dbErr) {
-        logger.error(`[Login] MongoDB read failed for ${username}: ${dbErr.message}`);
-        dbReadFailed = true;
-      }
+    const ok = safeCompare(String(username), String(expectedUser)) &&
+               safeCompare(String(password), String(expectedPass));
+    if (!ok) {
+      return res.status(401).json({ error: 'Credenciales invalidas' });
     }
-
-    // Fallback admin sin Mongo: APAGADO por defecto. Es un by-pass total si
-    // alguien tira Mongo abajo y conoce ADMIN_USERNAME/ADMIN_PASSWORD. Para
-    // usarlo en una emergencia real, prendelo con ENABLE_FALLBACK_ADMIN_LOGIN=1
-    // en la variable de entorno y apagalo apenas vuelva la DB.
-    if (dbReadFailed) {
-      if (process.env.ENABLE_FALLBACK_ADMIN_LOGIN !== '1') {
-        return res.status(503).json({ error: 'Servicio temporalmente no disponible. Intenta más tarde.' });
-      }
-      const fallbackAdminUsername = process.env.ADMIN_USERNAME;
-      const fallbackAdminPassword = process.env.ADMIN_PASSWORD;
-      const isAdminFallback = fallbackAdminUsername && fallbackAdminPassword &&
-        username === fallbackAdminUsername &&
-        safeCompare(password, fallbackAdminPassword);
-      if (!isAdminFallback) {
-        return res.status(503).json({ error: 'Servicio temporalmente no disponible. Intenta más tarde.' });
-      }
-      const fallbackToken = jwt.sign(
-        { userId: 'fallback-admin', username: fallbackAdminUsername, role: 'admin', tokenVersion: 0 },
-        JWT_SECRET,
-        { expiresIn: '4h' }
-      );
-      logger.warn(`[Login] FALLBACK ADMIN LOGIN USED (${fallbackAdminUsername}) - MongoDB unavailable. ENABLE_FALLBACK_ADMIN_LOGIN está prendido — APAGALO apenas vuelva la DB.`);
-      return res.json({
-        token: fallbackToken,
-        user: { id: 'fallback-admin', username: fallbackAdminUsername, role: 'admin', balance: 0, needsPasswordChange: false }
-      });
-    }
-    
-    // Solo cuentas internas (admins): no hay auto-creación de usuarios.
-    if (!user) {
-      return res.status(401).json({ error: 'Credenciales inválidas' });
-    }
-    
-    // Convertir a objeto plano para acceder a los campos correctamente
-    const userObj = user.toObject ? user.toObject() : user;
-    
-    // Usar 'id' si existe, sino usar '_id' como fallback
-    const userId = userObj.id || userObj._id?.toString();
-    
-    logger.debug(`User found: ${userObj.username}, ID: ${userId}`);
-    
-    const loginIdentifier = username || phone;
-    
-    if (!userId) {
-      logger.error(`User ${loginIdentifier} has no valid ID`);
-      return res.status(500).json({ error: 'Error de configuración de usuario. Contacta al administrador.' });
-    }
-    
-    if (!userObj.isActive) {
-      return res.status(401).json({ error: 'Credenciales inválidas' });
-    }
-
-    // Reject login for blocked users before doing any further work.
-    if (userObj.isBlocked === true) {
-      return res.status(403).json({
-        error: `Tu cuenta está bloqueada: ${userObj.blockReason || 'Contactá a soporte.'}`,
-        code: 'USER_BLOCKED'
-      });
-    }
-    
-    // Verificar que el usuario tenga una contraseña válida
-    if (!userObj.password) {
-      logger.error(`User ${loginIdentifier} has no password configured`);
-      return res.status(500).json({ error: 'Error de configuración de usuario. Contacta al administrador.' });
-    }
-    
-    // Verificar si la contraseña almacenada es un hash bcrypt válido
-    const isValidBcryptHash = userObj.password.startsWith('$2') || userObj.password.startsWith('$2a$') || userObj.password.startsWith('$2b$');
-    if (!isValidBcryptHash) {
-      logger.error(`User ${loginIdentifier} has password in invalid format`);
-      return res.status(500).json({ error: 'Error de configuración de usuario. Contacta al administrador.' });
-    }
-    
-    // Verificar si el usuario necesita cambiar la contraseña.
-    // Admin roles (admin/depositor/withdrawer) are internal VIPCARGAS accounts and
-    // must NEVER enter the mustChangePassword flow — even if their password is
-    // "asd123". Only role=user is subject to this check.
-    const isDefaultPassword = password === 'asd123';
-    const needsPasswordChange = isAdminRole(userObj.role)
-      ? false
-      : ((!userObj.passwordChangedAt && userObj.source === 'jugaygana') || isDefaultPassword);
-    
-    let isValidPassword = false;
-    
-    try {
-      isValidPassword = await bcrypt.compare(password, userObj.password);
-    } catch (bcryptError) {
-      logger.error(`Error comparing password for ${loginIdentifier}: ${bcryptError.message}`);
-    }
-    
-    // Fallback SOLO para usuarios auto-importados desde JUGAYGANA que aún no cambiaron
-    // su contraseña real (la inicial real es "asd123"). Para evitar backdoor:
-    //  - Sólo aplica si source === 'jugaygana' Y nunca cambió contraseña.
-    //  - Sólo aplica para role=user (admins nunca tienen contraparte en JUGAYGANA).
-    //  - Valida que el hash almacenado realmente corresponda a "asd123";
-    //    si la DB guarda otro hash, NO se acepta "asd123" como atajo.
-    if (!isValidPassword && password === 'asd123' && !userObj.passwordChangedAt && userObj.source === 'jugaygana' && !isAdminRole(userObj.role)) {
-      try {
-        isValidPassword = await bcrypt.compare('asd123', userObj.password);
-      } catch (bcryptError) {
-        logger.error(`Error verifying JUGAYGANA default password: ${bcryptError.message}`);
-      }
-    }
-    
-    if (!isValidPassword) {
-      logger.debug(`Wrong password for ${loginIdentifier}`);
-      return res.status(401).json({ error: 'Credenciales inválidas' });
-    }
-    
-    logger.info(`Login successful for ${loginIdentifier}`);
-    
-    // Actualizar lastLogin usando el modelo de Mongoose
-    user.lastLogin = new Date();
-    // Persist mustChangePassword only for non-admin roles. Admins are internal
-    // VIPCARGAS accounts and are never blocked by the JUGAYGANA default-password
-    // flow — even if their password happens to be "asd123".
-    if (needsPasswordChange && !isAdminRole(user.role) && user.mustChangePassword !== true) {
-      user.mustChangePassword = true;
-    }
-    // Self-heal: admins must NEVER carry mustChangePassword. If a stale flag
-    // from before the role-isolation fix is still in DB, clear it on next login.
-    if (isAdminRole(user.role) && user.mustChangePassword === true) {
-      user.mustChangePassword = false;
-      logger.info(`[login] Cleared stale mustChangePassword for admin ${user.username}`);
-    }
-    await user.save();
-    
-    // Token con expiración de 30 días para persistencia de sesión
-    const token = jwt.sign(
-      { userId: userId, username: userObj.username, role: userObj.role, tokenVersion: userObj.tokenVersion ?? 0 },
-      JWT_SECRET,
-      { expiresIn: '30d' }
-    );
-    
-    
-    // Set an httpOnly admin session cookie for admin roles so that the server
-    // can verify, on subsequent page requests, that the browser was genuinely
-    // authenticated — not just checking localStorage (client-side only).
-    // An httpOnly, SameSite=Strict, path-scoped cookie is the recommended
-    // alternative to localStorage for session tokens: it is inaccessible to
-    // JavaScript (XSS-safe) and is scoped to the admin path only.
-    const adminRoles = ['admin', 'depositor', 'withdrawer', 'closings_viewer'];
-    if (adminRoles.includes(userObj.role)) {
-      // Set two httpOnly cookies: one for page access, one for API calls.
-      // Neither can be read by client-side scripts (XSS-safe).
-      // Incluir tokenVersion para que `Revocar todas las sesiones` invalide
-      // este cookie también. Sin esto, después de un bump de tokenVersion el
-      // localStorage token quedaba inválido pero el cookie httpOnly de 8h
-      // sobrevivía hasta expiración natural.
-      const adminCookieToken = jwt.sign(
-        { userId: userId, username: userObj.username, role: userObj.role, tokenVersion: userObj.tokenVersion ?? 0 },
-        JWT_SECRET,
-        { expiresIn: '8h' }
-      );
-      res.setHeader('Set-Cookie', buildAdminSessionCookieHeaders(adminCookieToken));
-    }
-
+    const payload = { username: expectedUser, role: 'admin' };
+    const token = jwt.sign(payload, JWT_SECRET, { expiresIn: '30d' });
+    const cookieToken = jwt.sign(payload, JWT_SECRET, { expiresIn: '8h' });
+    res.setHeader('Set-Cookie', buildAdminSessionCookieHeaders(cookieToken));
+    logger.info(`[login] Acceso a Central Control: ${expectedUser}`);
     res.json({
       message: 'Login exitoso',
       token,
-      user: {
-        id: userId,
-        username: userObj.username,
-        email: userObj.email,
-        phone: userObj.phone || null,
-        phoneVerified: userObj.phoneVerified || false,
-        whatsapp: userObj.whatsapp || null,
-        accountNumber: userObj.accountNumber,
-        role: userObj.role,
-        balance: userObj.balance,
-        needsPasswordChange: needsPasswordChange,
-        // Cambio de contraseña obligatorio deshabilitado por requerimiento.
-        mustChangePassword: false
-      }
+      user: { username: expectedUser, role: 'admin' }
     });
   } catch (error) {
-    // Loggear stack completo para que en CloudWatch se vea la causa raíz.
-    // El errorCode + name ayuda a identificar issues típicos en producción:
-    //   MongooseError / MongoNetworkError → Mongo no llega
-    //   JsonWebTokenError → JWT_SECRET malformado/faltante
-    //   TypeError → bug del código
-    logger.error(`[Login] ${error.name || 'Error'}: ${error.message}`, {
-      stack: error.stack,
-      code: error.code,
-      name: error.name
-    });
-    res.status(500).json({
-      error: 'Error del servidor',
-      // El detalle del error sólo se incluye si DEBUG_LOGIN=1 en el env (no
-      // exponer info sensible por default). Útil para diagnosticar en AWS.
-      detail: process.env.DEBUG_LOGIN === '1' ? `${error.name}: ${error.message}` : undefined
-    });
+    logger.error(`[login] ${error.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
   }
 });
 
-// Construye el filtro mongo para excluir users de prefijos dados.
-// Devuelve null si no hay nada que excluir.
-function _buildExcludePrefixesFilter(prefixes) {
-  const arr = Array.isArray(prefixes)
-    ? prefixes.map(p => String(p || '').toLowerCase().trim()).filter(Boolean)
-    : [];
-  if (arr.length === 0) return null;
-  // Regex case-insensitive: ^(?!prefix1|prefix2|...).
-  const escaped = arr.map(p => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-  return { username: { $not: new RegExp('^(' + escaped.join('|') + ')', 'i') } };
-}
-
-// Carga los prefijos con excludeFromCodes=true desde el config.
-async function _getExcludedFromCodesPrefixes() {
-  try {
-    const cfg = await getConfig('userCommunitiesByPrefix').catch(() => null);
-    if (!cfg || !Array.isArray(cfg.slots)) return [];
-    return cfg.slots
-      .filter(s => s && s.excludeFromCodes && s.prefix)
-      .map(s => String(s.prefix).toLowerCase().trim())
-      .filter(Boolean);
-  } catch (_) {
-    return [];
-  }
-}
- // 1 min
-
-// User logout — limpia el token FCM actual del backend para que las
-// notificaciones no sigan llegando a este dispositivo después de cerrar
-// sesión. Acepta el fcmToken por body o por query; si no viene, intenta
-// inferirlo del header Authorization (último token registrado del user).
-// Nunca devuelve 401: cerrar sesión siempre es válido aunque el token JWT
-// esté expirado.
-app.post('/api/auth/logout', async (req, res) => {
-  try {
-    const fcmToken = (req.body && req.body.fcmToken) || (req.query && req.query.fcmToken) || null;
-
-    // Intentar identificar al usuario por el JWT. Si está expirado o ausente,
-    // hacemos best-effort: borramos el fcmToken provisto donde sea que esté.
-    let userId = null;
-    const authHeader = req.headers.authorization || '';
-    const authToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
-    if (authToken) {
-      try {
-        const decoded = jwt.verify(authToken, JWT_SECRET);
-        userId = decoded.userId;
-      } catch (_) {
-        // JWT expirado/inválido: igual seguimos para limpiar por token si vino
-      }
-    }
-
-    if (fcmToken) {
-      const tokenStr = String(fcmToken);
-      // Borrar del array fcmTokens y del campo individual donde coincida
-      if (userId) {
-        await User.updateOne(
-          { id: userId },
-          { $pull: { fcmTokens: { token: tokenStr } } }
-        );
-        await User.updateOne(
-          { id: userId, fcmToken: tokenStr },
-          { $set: { fcmToken: null, fcmTokenUpdatedAt: null } }
-        );
-      } else {
-        // Sin userId verificado: borrar el token donde sea que esté.
-        await User.updateMany(
-          { 'fcmTokens.token': tokenStr },
-          { $pull: { fcmTokens: { token: tokenStr } } }
-        );
-        await User.updateMany(
-          { fcmToken: tokenStr },
-          { $set: { fcmToken: null, fcmTokenUpdatedAt: null } }
-        );
-      }
-      logger.info(`[AUTH] logout: token FCM eliminado (user=${userId || 'unknown'}, token=...${tokenStr.slice(-8)})`);
-    }
-
-    res.json({ success: true });
-  } catch (error) {
-    // Logout siempre debe responder OK al cliente; loggeamos para diagnóstico.
-    logger.warn(`[AUTH] logout: error limpiando token FCM: ${error.message}`);
-    res.json({ success: true });
-  }
+app.post('/api/auth/logout', (req, res) => {
+  const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
+  res.setHeader('Set-Cookie', [
+    `admin_session=; HttpOnly; SameSite=Strict; Max-Age=0; Path=/${secure}`,
+    `admin_api_session=; HttpOnly; SameSite=Strict; Max-Age=0; Path=/api${secure}`
+  ]);
+  res.json({ success: true });
 });
 
 // Admin logout — clears both admin httpOnly cookies.
@@ -981,66 +579,23 @@ app.post('/api/auth/logout', async (req, res) => {
 app.post('/api/auth/admin-logout', (req, res) => {
   const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
   res.setHeader('Set-Cookie', [
-    `admin_session=; HttpOnly; SameSite=Strict; Max-Age=0; Path=/adminprivado2026${secure}`,
+    `admin_session=; HttpOnly; SameSite=Strict; Max-Age=0; Path=/${secure}`,
     `admin_api_session=; HttpOnly; SameSite=Strict; Max-Age=0; Path=/api${secure}`
   ]);
   res.json({ success: true });
 });
 
 // Verify token
-app.get('/api/auth/verify', authMiddleware, async (req, res) => {
-  try {
-    // Buscar usuario completo
-    const user = await User.findOne({ id: req.user.userId }).select('-password').lean();
-    
-    if (!user) {
-      return res.status(401).json({ error: 'Usuario no encontrado' });
-    }
-    
-    res.json({ 
-      valid: true,
-      user: {
-        userId: user.id,
-        username: user.username,
-        email: user.email,
-        role: user.role,
-        balance: user.balance,
-        mustChangePassword: false
-      }
-    });
-  } catch (error) {
-    console.error('Error verificando token:', error);
-    res.status(500).json({ error: 'Error del servidor' });
-  }
+app.get('/api/auth/verify', authMiddleware, (req, res) => {
+  res.json({
+    valid: true,
+    user: { username: req.user.username, role: req.user.role }
+  });
 });
 
 // Obtener información del usuario actual
-app.get('/api/users/me', authMiddleware, async (req, res) => {
-  try {
-    // Buscar por 'id' primero, luego por '_id' como fallback
-    let user = await User.findOne({ id: req.user.userId })
-      .select(USER_PUBLIC_FIELDS)
-      .lean();
-    
-    if (!user) {
-      try {
-        user = await User.findById(req.user.userId)
-          .select(USER_PUBLIC_FIELDS)
-          .lean();
-      } catch (e) {
-        // _id inválido, ignorar
-      }
-    }
-    
-    if (!user) {
-      return res.status(404).json({ error: 'Usuario no encontrado' });
-    }
-    
-    res.json(user);
-  } catch (error) {
-    console.error('Error obteniendo usuario:', error);
-    res.status(500).json({ error: 'Error del servidor' });
-  }
+app.get('/api/users/me', authMiddleware, (req, res) => {
+  res.json({ username: req.user.username, role: req.user.role });
 });
 
 /**
@@ -1290,7 +845,7 @@ const _DEFAULT_SECTION_PIN = '1818';
 // Defaults específicos por sección — overridean _DEFAULT_SECTION_PIN.
 // Útil para que distintas secciones empiecen con PIN distinto sin que el
 // admin tenga que ir a cambiarlos a mano.
-const _SECTION_DEFAULT_PINS = { closings: '3333' };
+const _SECTION_DEFAULT_PINS = { closings: '3333', empleados: '2020' };
 // PINs previos seedeados por defecto en deploys anteriores. Si el valor en
 // la DB todavía es uno de estos, se rotará al default nuevo en el próximo
 // _getSectionPins(). Si el owner ya cambió la clave a otro valor distinto,
@@ -1307,7 +862,7 @@ const _defaultPinForSection = (s) => _SECTION_DEFAULT_PINS[s] || _DEFAULT_SECTIO
 // frontend-gate: los endpoints /api/admin/closings* NO requieren el token
 // de section-pin porque también los usa el rol closings_viewer que no es
 // full admin y no puede llamar a /section-pins/verify).
-const _PROTECTED_SECTIONS = ['numero', 'backupPhones', 'teams', 'closings'];
+const _PROTECTED_SECTIONS = ['closings', 'empleados'];
 
 async function _getSectionPins() {
   let v = await getConfig('admin_section_pins', null);

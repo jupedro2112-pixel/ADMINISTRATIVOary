@@ -1,13 +1,13 @@
 {
-  "name": "Admin Sala de Juegos",
-  "short_name": "Admin Sala",
-  "description": "Panel de administración para Sala de Juegos con notificaciones push",
-  "start_url": "/adminprivado2026/",
+  "name": "Central Control",
+  "short_name": "Central Control",
+  "description": "Panel administrativo de Cierres",
+  "start_url": "/",
   "display": "standalone",
   "background_color": "#0f172a",
   "theme_color": "#6366f1",
   "orientation": "portrait",
-  "scope": "/adminprivado2026/",
+  "scope": "/",
   "icons": [
     {
       "src": "/icons/icon-72x72.png",
@@ -58,7 +58,10 @@
       "purpose": "any maskable"
     }
   ],
-  "categories": ["productivity", "utilities"],
+  "categories": [
+    "productivity",
+    "utilities"
+  ],
   "lang": "es",
   "dir": "ltr",
   "prefer_related_applications": false
