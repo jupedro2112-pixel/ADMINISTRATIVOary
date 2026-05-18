@@ -533,31 +533,43 @@ app.get('/api/health', async (req, res) => {
 });
 
 // Login
+// Credenciales fijas de Central Control. Se ignoran a propósito las env
+// vars ADMIN_USERNAME / ADMIN_PASSWORD para que el acceso sea siempre el
+// mismo y no dependa de la configuración en Render.
+//  - ignite1000: admin completo.
+//  - crazy: rol acotado (sector_editor) — solo edita los nombres de los
+//    sectores ganamos/publicidad/buffalo.
+const _LOGIN_USERS = [
+  { username: 'ignite1000', password: 'pepsi100', role: 'admin' },
+  { username: 'crazy',      password: 'crazy100', role: 'sector_editor' }
+];
+
 app.post('/api/auth/login', authLimiter, async (req, res) => {
   try {
     const { username, password } = req.body || {};
     if (!username || !password) {
       return res.status(400).json({ error: 'Usuario y contraseña requeridos' });
     }
-    // Credenciales fijas de Central Control. Se ignoran a propósito las
-    // env vars ADMIN_USERNAME / ADMIN_PASSWORD para que el acceso sea
-    // siempre el mismo y no dependa de la configuración en Render.
-    const expectedUser = 'ignite1000';
-    const expectedPass = 'pepsi100';
-    const ok = safeCompare(String(username), String(expectedUser)) &&
-               safeCompare(String(password), String(expectedPass));
-    if (!ok) {
+    let matched = null;
+    for (const u of _LOGIN_USERS) {
+      if (safeCompare(String(username), u.username) &&
+          safeCompare(String(password), u.password)) {
+        matched = u;
+        break;
+      }
+    }
+    if (!matched) {
       return res.status(401).json({ error: 'Credenciales invalidas' });
     }
-    const payload = { username: expectedUser, role: 'admin' };
+    const payload = { username: matched.username, role: matched.role };
     const token = jwt.sign(payload, JWT_SECRET, { expiresIn: '30d' });
     const cookieToken = jwt.sign(payload, JWT_SECRET, { expiresIn: '8h' });
     res.setHeader('Set-Cookie', buildAdminSessionCookieHeaders(cookieToken));
-    logger.info(`[login] Acceso a Central Control: ${expectedUser}`);
+    logger.info(`[login] Acceso a Central Control: ${matched.username} (${matched.role})`);
     res.json({
       message: 'Login exitoso',
       token,
-      user: { username: expectedUser, role: 'admin' }
+      user: { username: matched.username, role: matched.role }
     });
   } catch (error) {
     logger.error(`[login] ${error.message}`);
@@ -937,6 +949,63 @@ app.get('/api/admin/section-pins/status', authMiddleware, adminMiddleware, async
   } catch (err) {
     logger.error(`/api/admin/section-pins/status: ${err.message}`);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================================
+// NOMBRES DE SECTORES (ganamos / publicidad / buffalo)
+// ============================================================
+// Las claves internas (ganamos/publicidad/buffalo) son fijas — son parte
+// del modelo de datos. Lo editable es solo el nombre que se MUESTRA en el
+// panel (Cierres General y Empleados). Se guarda en Config 'sector_names'.
+// El usuario `crazy` (rol sector_editor) es quien los edita.
+const _SECTOR_KEYS = ['ganamos', 'publicidad', 'buffalo'];
+const _SECTOR_NAMES_DEFAULT = { ganamos: 'GANAMOS', publicidad: 'PUBLICIDAD', buffalo: 'BUFFALO' };
+
+async function _getSectorNames() {
+  let v = await getConfig('sector_names', null);
+  if (!v || typeof v !== 'object') v = {};
+  const out = {};
+  for (const k of _SECTOR_KEYS) {
+    out[k] = (typeof v[k] === 'string' && v[k].trim()) ? v[k].trim() : _SECTOR_NAMES_DEFAULT[k];
+  }
+  return out;
+}
+
+// GET — cualquier usuario logueado puede leer los nombres.
+app.get('/api/admin/sector-names', authMiddleware, async (req, res) => {
+  try {
+    res.json({ success: true, names: await _getSectorNames() });
+  } catch (err) {
+    logger.error(`GET /api/admin/sector-names: ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// PUT — solo admin o sector_editor pueden cambiar los nombres.
+app.put('/api/admin/sector-names', authMiddleware, async (req, res) => {
+  try {
+    const role = req.user && req.user.role;
+    if (role !== 'admin' && role !== 'sector_editor') {
+      return res.status(403).json({ error: 'Acceso denegado' });
+    }
+    const body = (req.body && req.body.names) || req.body || {};
+    const current = await _getSectorNames();
+    const next = {};
+    for (const k of _SECTOR_KEYS) {
+      const raw = body[k];
+      if (raw === undefined || raw === null) { next[k] = current[k]; continue; }
+      const name = String(raw).trim();
+      if (!name) return res.status(400).json({ error: `El nombre de "${k}" no puede estar vacío` });
+      if (name.length > 24) return res.status(400).json({ error: `El nombre de "${k}" es muy largo (máx 24)` });
+      next[k] = name;
+    }
+    await setConfig('sector_names', next);
+    logger.info(`[sector-names] actualizado por ${(req.user && req.user.username) || '?'}: ${JSON.stringify(next)}`);
+    res.json({ success: true, names: next });
+  } catch (err) {
+    logger.error(`PUT /api/admin/sector-names: ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
   }
 });
 

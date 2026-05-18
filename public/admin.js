@@ -176,7 +176,7 @@ async function handleLogin(e) {
             return;
         }
 
-        const adminRoles = ['admin', 'depositor', 'withdrawer', 'closings_viewer'];
+        const adminRoles = ['admin', 'depositor', 'withdrawer', 'closings_viewer', 'sector_editor'];
         if (!adminRoles.includes(data.user && data.user.role)) {
             errEl.textContent = 'Tu cuenta no tiene permisos de administrador';
             return;
@@ -231,6 +231,13 @@ function startActiveUsersBadge() {
 }
 
 function showApp() {
+    // Usuario `crazy` (rol sector_editor): no entra al panel, va directo
+    // a la pantalla restringida para renombrar los sectores.
+    if (currentAdmin && currentAdmin.role === 'sector_editor') {
+        _showSectorEditorScreen();
+        return;
+    }
+
     document.getElementById('loginScreen').classList.add('hidden');
     document.getElementById('app').classList.remove('hidden');
     const nameEl = document.getElementById('adminName');
@@ -246,10 +253,12 @@ function showApp() {
         return;
     }
 
-    // Cargar la sección por defecto (Cierres general). Protegida con PIN:
-    // al entrar se pide la clave una vez y quedan desbloqueadas las 7
-    // secciones de Cierres.
-    try { showSection('closings'); } catch (_) {}
+    // Cargar los nombres de sectores antes de renderizar, así Cierres y
+    // Empleados muestran los nombres personalizados desde el primer render.
+    // Luego abre la sección por defecto (Cierres general, protegida con PIN).
+    _loadSectorNames().finally(() => {
+        try { showSection('closings'); } catch (_) {}
+    });
 }
 
 // ============================================
@@ -487,7 +496,7 @@ document.addEventListener('DOMContentLoaded', function () {
         }).then(async (r) => {
             if (!r.ok) throw new Error('invalid');
             const data = await r.json();
-            const adminRoles = ['admin', 'depositor', 'withdrawer', 'closings_viewer'];
+            const adminRoles = ['admin', 'depositor', 'withdrawer', 'closings_viewer', 'sector_editor'];
             if (!adminRoles.includes(data.role)) throw new Error('not admin');
             currentAdmin = data;
             showApp();
@@ -507,6 +516,103 @@ const CLOSING_SECTORS_UI = [
     { key: 'publicidad', label: '📢 PUBLICIDAD', color: '#00d4ff', individual: true,  slots: 7 },
     { key: 'buffalo',    label: '🐃 BUFFALO',    color: '#ffd700', individual: true,  slots: 7 }
 ];
+
+// ============================================
+// NOMBRES DE SECTORES — editables por el usuario `crazy`
+// ============================================
+// La clave interna (ganamos/publicidad/buffalo) es fija; el emoji también.
+// Lo editable es el texto, que se guarda en el backend (Config sector_names)
+// y se aplica a CLOSING_SECTORS_UI y EMP_SECTORS_UI (Cierres y Empleados).
+const _SECTOR_EMOJI = { ganamos: '💼', publicidad: '📢', buffalo: '🐃' };
+let _sectorNames = { ganamos: 'GANAMOS', publicidad: 'PUBLICIDAD', buffalo: 'BUFFALO' };
+
+function _sectorLabel(key) {
+    return (_SECTOR_EMOJI[key] || '') + ' ' + (_sectorNames[key] || String(key || '').toUpperCase());
+}
+
+// Vuelca los nombres recibidos sobre las arrays de UI (muta los .label).
+function _applySectorNames(names) {
+    if (names && typeof names === 'object') {
+        ['ganamos', 'publicidad', 'buffalo'].forEach((k) => {
+            if (typeof names[k] === 'string' && names[k].trim()) _sectorNames[k] = names[k].trim();
+        });
+    }
+    [CLOSING_SECTORS_UI, EMP_SECTORS_UI].forEach((arr) => {
+        if (!Array.isArray(arr)) return;
+        arr.forEach((s) => { if (s && _SECTOR_EMOJI[s.key]) s.label = _sectorLabel(s.key); });
+    });
+}
+
+async function _loadSectorNames() {
+    try {
+        const r = await authFetch('/api/admin/sector-names');
+        const d = await r.json();
+        if (r.ok && d && d.names) _applySectorNames(d.names);
+    } catch (_) {}
+}
+
+// Pantalla restringida del usuario `crazy`: solo renombrar los 3 sectores.
+async function _showSectorEditorScreen() {
+    document.getElementById('loginScreen').classList.add('hidden');
+    document.getElementById('app').classList.add('hidden');
+    document.getElementById('sectorEditorScreen')?.remove();
+
+    let names = { ganamos: 'GANAMOS', publicidad: 'PUBLICIDAD', buffalo: 'BUFFALO' };
+    try {
+        const r = await authFetch('/api/admin/sector-names');
+        const d = await r.json();
+        if (r.ok && d && d.names) names = d.names;
+    } catch (_) {}
+
+    const screen = document.createElement('div');
+    screen.id = 'sectorEditorScreen';
+    screen.style.cssText = 'position:fixed;inset:0;background:linear-gradient(160deg,#0a0014,#1a0033);z-index:9000;display:flex;align-items:center;justify-content:center;padding:20px;overflow:auto;';
+    const row = (k, n) => '<div style="margin-bottom:14px;">' +
+        '<label style="display:block;color:#aaa;font-size:11px;text-transform:uppercase;letter-spacing:0.6px;margin-bottom:5px;">' + _SECTOR_EMOJI[k] + ' Sector ' + n + '</label>' +
+        '<input type="text" id="secName_' + k + '" maxlength="24" value="' + escapeHtml(names[k] || '') + '" style="width:100%;background:#0a0a0a;color:#fff;border:1.5px solid rgba(212,175,55,0.40);padding:10px 14px;border-radius:8px;font-size:15px;font-weight:800;box-sizing:border-box;">' +
+        '</div>';
+    screen.innerHTML = '<div style="background:#1a0033;border:1.5px solid #d4af37;border-radius:16px;padding:26px;max-width:420px;width:100%;color:#fff;box-shadow:0 0 50px rgba(212,175,55,0.25);">' +
+        '<div style="text-align:center;margin-bottom:20px;">' +
+        '<div style="font-size:36px;">🏷️</div>' +
+        '<h2 style="margin:6px 0 2px;color:#d4af37;font-size:18px;">Nombres de sectores</h2>' +
+        '<div style="color:#999;font-size:11.5px;">Editá cómo se llaman los 3 sectores. El cambio se ve en todo el panel.</div>' +
+        '</div>' +
+        row('ganamos', '1') + row('publicidad', '2') + row('buffalo', '3') +
+        '<div id="secEditMsg" style="min-height:16px;font-size:12px;text-align:center;margin:4px 0 10px;"></div>' +
+        '<button type="button" id="secEditSave" style="width:100%;background:linear-gradient(135deg,#d4af37,#f4d966);color:#1a0033;border:none;padding:12px;border-radius:9px;font-weight:900;font-size:14px;cursor:pointer;letter-spacing:0.5px;">💾 GUARDAR</button>' +
+        '<button type="button" id="secEditLogout" style="width:100%;background:transparent;color:#888;border:none;padding:10px;margin-top:8px;font-size:12px;cursor:pointer;text-decoration:underline;">Cerrar sesión</button>' +
+        '</div>';
+    document.body.appendChild(screen);
+
+    document.getElementById('secEditSave').onclick = async () => {
+        const msg = document.getElementById('secEditMsg');
+        const payload = {
+            ganamos:    (document.getElementById('secName_ganamos').value || '').trim(),
+            publicidad: (document.getElementById('secName_publicidad').value || '').trim(),
+            buffalo:    (document.getElementById('secName_buffalo').value || '').trim()
+        };
+        if (!payload.ganamos || !payload.publicidad || !payload.buffalo) {
+            msg.style.color = '#ff8080'; msg.textContent = 'Completá los 3 nombres'; return;
+        }
+        msg.style.color = '#aaa'; msg.textContent = '⏳ Guardando...';
+        try {
+            const r = await authFetch('/api/admin/sector-names', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ names: payload })
+            });
+            const d = await r.json();
+            if (!r.ok || !d.success) { msg.style.color = '#ff8080'; msg.textContent = '❌ ' + (d.error || 'Error'); return; }
+            msg.style.color = '#66ff99'; msg.textContent = '✅ Guardado';
+        } catch (e) {
+            msg.style.color = '#ff8080'; msg.textContent = 'Error de conexión';
+        }
+    };
+    document.getElementById('secEditLogout').onclick = () => {
+        document.getElementById('sectorEditorScreen')?.remove();
+        handleLogout();
+    };
+}
 
 let _closingsRowsCache = [];      // historial completo (últimos N días) para la selección activa
 let _closingsTodayKey = null;
@@ -1821,7 +1927,7 @@ async function analyzeClosing(id) {
     }
 
     // Sector label
-    const secLabel = (r.sector === 'buffalo') ? '🐃 BUFFALO' : (r.sector === 'ganamos' ? '🎯 GANAMOS' : '📢 PUBLICIDAD');
+    const secLabel = _sectorLabel(r.sector);
 
     // Modal
     let m = document.getElementById('clsAnalyzeModal');
