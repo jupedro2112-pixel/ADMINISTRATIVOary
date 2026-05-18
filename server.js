@@ -536,12 +536,12 @@ app.get('/api/health', async (req, res) => {
 // Credenciales fijas de Central Control. Se ignoran a propósito las env
 // vars ADMIN_USERNAME / ADMIN_PASSWORD para que el acceso sea siempre el
 // mismo y no dependa de la configuración en Render.
-//  - ignite1000: admin completo.
-//  - crazy: rol acotado (sector_editor) — solo edita los nombres de los
-//    sectores ganamos/publicidad/buffalo.
+// Los dos son admin con panel completo, pero cada uno trabaja sobre su
+// propio set de datos (ver _models(): ignite1000 = colecciones base,
+// crazy = colecciones *_crazy independientes).
 const _LOGIN_USERS = [
   { username: 'ignite1000', password: 'pepsi100', role: 'admin' },
-  { username: 'crazy',      password: 'crazy100', role: 'sector_editor' }
+  { username: 'crazy',      password: 'crazy100', role: 'admin' }
 ];
 
 app.post('/api/auth/login', authLimiter, async (req, res) => {
@@ -958,12 +958,18 @@ app.get('/api/admin/section-pins/status', authMiddleware, adminMiddleware, async
 // Las claves internas (ganamos/publicidad/buffalo) son fijas — son parte
 // del modelo de datos. Lo editable es solo el nombre que se MUESTRA en el
 // panel (Cierres General y Empleados). Se guarda en Config 'sector_names'.
-// El usuario `crazy` (rol sector_editor) es quien los edita.
+// Se guardan por login (ver _models / _tenantOf): cada uno tiene los suyos.
 const _SECTOR_KEYS = ['ganamos', 'publicidad', 'buffalo'];
 const _SECTOR_NAMES_DEFAULT = { ganamos: 'GANAMOS', publicidad: 'PUBLICIDAD', buffalo: 'BUFFALO' };
 
-async function _getSectorNames() {
-  let v = await getConfig('sector_names', null);
+// Config key de nombres de sectores, namespaceado por login: cada tenant
+// tiene los suyos (sector_names para main, sector_names__crazy para crazy).
+function _sectorNamesKey(req) {
+  return _tenantOf(req) === 'crazy' ? 'sector_names__crazy' : 'sector_names';
+}
+
+async function _getSectorNames(req) {
+  let v = await getConfig(_sectorNamesKey(req), null);
   if (!v || typeof v !== 'object') v = {};
   const out = {};
   for (const k of _SECTOR_KEYS) {
@@ -972,25 +978,21 @@ async function _getSectorNames() {
   return out;
 }
 
-// GET — cualquier usuario logueado puede leer los nombres.
+// GET — cualquier usuario logueado puede leer los nombres de su login.
 app.get('/api/admin/sector-names', authMiddleware, async (req, res) => {
   try {
-    res.json({ success: true, names: await _getSectorNames() });
+    res.json({ success: true, names: await _getSectorNames(req) });
   } catch (err) {
     logger.error(`GET /api/admin/sector-names: ${err.message}`);
     res.status(500).json({ error: 'Error del servidor' });
   }
 });
 
-// PUT — solo admin o sector_editor pueden cambiar los nombres.
-app.put('/api/admin/sector-names', authMiddleware, async (req, res) => {
+// PUT — solo admin puede cambiar los nombres.
+app.put('/api/admin/sector-names', authMiddleware, adminMiddleware, async (req, res) => {
   try {
-    const role = req.user && req.user.role;
-    if (role !== 'admin' && role !== 'sector_editor') {
-      return res.status(403).json({ error: 'Acceso denegado' });
-    }
     const body = (req.body && req.body.names) || req.body || {};
-    const current = await _getSectorNames();
+    const current = await _getSectorNames(req);
     const next = {};
     for (const k of _SECTOR_KEYS) {
       const raw = body[k];
@@ -1000,8 +1002,8 @@ app.put('/api/admin/sector-names', authMiddleware, async (req, res) => {
       if (name.length > 24) return res.status(400).json({ error: `El nombre de "${k}" es muy largo (máx 24)` });
       next[k] = name;
     }
-    await setConfig('sector_names', next);
-    logger.info(`[sector-names] actualizado por ${(req.user && req.user.username) || '?'}: ${JSON.stringify(next)}`);
+    await setConfig(_sectorNamesKey(req), next);
+    logger.info(`[sector-names] (${_tenantOf(req)}) actualizado por ${(req.user && req.user.username) || '?'}: ${JSON.stringify(next)}`);
     res.json({ success: true, names: next });
   } catch (err) {
     logger.error(`PUT /api/admin/sector-names: ${err.message}`);
@@ -1055,6 +1057,8 @@ const ClosingEntry = require('./src/models/ClosingEntry');
 
 const CLOSING_SECTORS = ['ganamos', 'publicidad', 'buffalo'];
 const CLOSING_LOCK_HOURS = 24;
+// Cantidad de equipos por sector en los cierres (slots 0..N-1).
+const BUFFALO_TEAM_SLOTS = 10;
 
 function _closingComputeTotals(c) {
   const deposits = Number(c.depositsARS || 0);         // cargas totales (Σ de 7 equipos)
@@ -1169,6 +1173,7 @@ function _closingDateKeyART(now) {
 // Lista cierres con filtros. Default = últimos 30 días.
 app.get('/api/admin/closings', authMiddleware, closingsAccessMiddleware, async (req, res) => {
   try {
+    const { ClosingEntry } = _models(req);
     const today = _closingDateKeyART();
     const from = String(req.query.from || '').match(/^\d{4}-\d{2}-\d{2}$/) ? req.query.from : null;
     const to   = String(req.query.to   || '').match(/^\d{4}-\d{2}-\d{2}$/) ? req.query.to   : today;
@@ -1214,6 +1219,7 @@ app.get('/api/admin/closings', authMiddleware, closingsAccessMiddleware, async (
 // lite=1 (sin urls) para no chocar el browser con MB de base64.
 app.get('/api/admin/closings/:id', authMiddleware, closingsAccessMiddleware, async (req, res) => {
   try {
+    const { ClosingEntry } = _models(req);
     const id = String(req.params.id || '');
     const r = await ClosingEntry.findOne({ id }).lean();
     if (!r) return res.status(404).json({ error: 'Cierre no encontrado' });
@@ -1235,7 +1241,7 @@ app.get('/api/admin/closings/:id', authMiddleware, closingsAccessMiddleware, asy
 function _normalizeBuffaloTeams(input) {
   const arr = Array.isArray(input) ? input : [];
   const out = [];
-  for (let i = 0; i < 7; i++) {
+  for (let i = 0; i < BUFFALO_TEAM_SLOTS; i++) {
     const src = arr.find(t => t && Number(t.slot) === i) || {};
     out.push({
       slot: i,
@@ -1273,6 +1279,7 @@ function _aggregateBuffaloTeams(teams) {
 //   bonusCount,transactionsCount}, ...] }.
 app.post('/api/admin/closings', authMiddleware, closingsAccessMiddleware, async (req, res) => {
   try {
+    const { ClosingEntry } = _models(req);
     const b = req.body || {};
     const sector = String(b.sector || '');
     if (!CLOSING_SECTORS.includes(sector)) {
@@ -1359,6 +1366,7 @@ app.post('/api/admin/closings', authMiddleware, closingsAccessMiddleware, async 
 // Cualquier cambio queda en editHistory para auditoría.
 app.put('/api/admin/closings/:id', authMiddleware, closingsAccessMiddleware, async (req, res) => {
   try {
+    const { ClosingEntry } = _models(req);
     const id = String(req.params.id || '');
     const c = await ClosingEntry.findOne({ id });
     if (!c) return res.status(404).json({ error: 'Cierre no encontrado' });
@@ -1443,6 +1451,7 @@ app.put('/api/admin/closings/:id', authMiddleware, closingsAccessMiddleware, asy
 // sigue ahí). Sin esto, se considera plata faltante y rechazamos.
 app.post('/api/admin/closings/:id/confirm', authMiddleware, closingsAccessMiddleware, async (req, res) => {
   try {
+    const { ClosingEntry } = _models(req);
     const id = String(req.params.id || '');
     const c = await ClosingEntry.findOne({ id });
     if (!c) return res.status(404).json({ error: 'Cierre no encontrado' });
@@ -1477,6 +1486,7 @@ app.post('/api/admin/closings/:id/confirm', authMiddleware, closingsAccessMiddle
 // (el owner revisó el análisis y dió OK manual). Sólo si está confirmado.
 app.post('/api/admin/closings/:id/verify', authMiddleware, closingsAccessMiddleware, async (req, res) => {
   try {
+    const { ClosingEntry } = _models(req);
     const id = String(req.params.id || '');
     const c = await ClosingEntry.findOne({ id });
     if (!c) return res.status(404).json({ error: 'Cierre no encontrado' });
@@ -1506,6 +1516,7 @@ app.post('/api/admin/closings/:id/verify', authMiddleware, closingsAccessMiddlew
 // Body: { url, kind: 'bajada'|'pendiente_bank', note }
 app.post('/api/admin/closings/:id/comprobante', authMiddleware, closingsAccessMiddleware, async (req, res) => {
   try {
+    const { ClosingEntry } = _models(req);
     const id = String(req.params.id || '');
     const c = await ClosingEntry.findOne({ id });
     if (!c) return res.status(404).json({ error: 'Cierre no encontrado' });
@@ -1529,7 +1540,7 @@ app.post('/api/admin/closings/:id/comprobante', authMiddleware, closingsAccessMi
     const kind = validKinds.includes(req.body && req.body.kind) ? req.body.kind : 'deposito';
     const note = String((req.body && req.body.note) || '').trim().slice(0, 200);
     const slotRaw = req.body && req.body.teamSlot;
-    const teamSlot = (Number.isInteger(slotRaw) && slotRaw >= 0 && slotRaw <= 6) ? slotRaw : null;
+    const teamSlot = (Number.isInteger(slotRaw) && slotRaw >= 0 && slotRaw < BUFFALO_TEAM_SLOTS) ? slotRaw : null;
     c.comprobantes.push({ url, kind, teamSlot, note, uploadedBy: req.user.username || '' });
     c.editHistory.push({
       editedAt: new Date(),
@@ -1549,6 +1560,7 @@ app.post('/api/admin/closings/:id/comprobante', authMiddleware, closingsAccessMi
 // DELETE /api/admin/closings/:id/comprobante/:idx — sacar un comprobante.
 app.delete('/api/admin/closings/:id/comprobante/:idx', authMiddleware, closingsAccessMiddleware, async (req, res) => {
   try {
+    const { ClosingEntry } = _models(req);
     const id = String(req.params.id || '');
     const idx = parseInt(req.params.idx, 10);
     const c = await ClosingEntry.findOne({ id });
@@ -1582,6 +1594,7 @@ app.delete('/api/admin/closings/:id/comprobante/:idx', authMiddleware, closingsA
 const CLOSING_DELETE_PIN = '1818';
 app.delete('/api/admin/closings/:id', authMiddleware, closingsAccessMiddleware, async (req, res) => {
   try {
+    const { ClosingEntry } = _models(req);
     const id = String(req.params.id || '');
     const pin = String(
       (req.query && req.query.pin) ||
@@ -1611,6 +1624,7 @@ app.delete('/api/admin/closings/:id', authMiddleware, closingsAccessMiddleware, 
 // GET /api/admin/closings/summary?from=&to= — totales agregados.
 app.get('/api/admin/closings/summary', authMiddleware, closingsAccessMiddleware, async (req, res) => {
   try {
+    const { ClosingEntry } = _models(req);
     const today = _closingDateKeyART();
     const from = String(req.query.from || '').match(/^\d{4}-\d{2}-\d{2}$/) ? req.query.from : null;
     const to   = String(req.query.to   || '').match(/^\d{4}-\d{2}-\d{2}$/) ? req.query.to   : today;
@@ -1683,6 +1697,7 @@ app.get('/api/admin/closings/summary', authMiddleware, closingsAccessMiddleware,
 // comparativa empresarial. Acepta filtro opcional por sector/equipo.
 app.get('/api/admin/closings/analysis', authMiddleware, closingsAccessMiddleware, async (req, res) => {
   try {
+    const { ClosingEntry } = _models(req);
     const period = ['day','week','month'].includes(String(req.query.period)) ? req.query.period : 'month';
     const sector = CLOSING_SECTORS.includes(String(req.query.sector)) ? req.query.sector : null;
     const teamSlotRaw = req.query.teamSlot;
@@ -1887,14 +1902,15 @@ function _cotizacionCompute(c) {
 
 // GET /api/admin/cotizaciones?from=YYYY-MM-DD&to=YYYY-MM-DD
 // Factory: monta los endpoints CRUD de cotizaciones en `prefix` (sin slash
-// trailing), usando `Model` como modelo de mongoose y `label` como nombre
-// humano para logs. Lo usamos dos veces: una para /api/admin/cotizaciones
-// (CotizacionEntry) y otra para /api/admin/cotizaciones-externo
-// (CotizacionExternaEntry). Misma lógica, distinta collection.
-function _mountCotizacionRoutes(prefix, Model, label) {
+// trailing). `modelKey` es la clave del modelo dentro de _models(req)
+// ('CotizacionEntry' o 'CotizacionExternaEntry') — cada handler resuelve
+// el modelo según el login (datos separados por tenant). `label` es el
+// nombre humano para logs.
+function _mountCotizacionRoutes(prefix, modelKey, label) {
 
 app.get(prefix, authMiddleware, closingsAccessMiddleware, async (req, res) => {
   try {
+    const Model = _models(req)[modelKey];
     const today = _closingDateKeyART();
     const from = String(req.query.from || '').match(/^\d{4}-\d{2}-\d{2}$/) ? req.query.from : null;
     const to   = String(req.query.to   || '').match(/^\d{4}-\d{2}-\d{2}$/) ? req.query.to   : today;
@@ -1943,12 +1959,14 @@ app.get(prefix, authMiddleware, closingsAccessMiddleware, async (req, res) => {
 // Config key para guardar la plantilla de equipos (nombres + % comisión)
 // por scope. Cuando se crea una cotización nueva, si hay plantilla, se
 // pre-rellena con ella así el dueño no tiene que tipear todo de nuevo.
-const _defaultsConfigKey = (lbl) => 'cotizacion_defaults_' + lbl;
+// Namespaceada por login: cada tenant tiene su propia plantilla.
+const _defaultsConfigKey = (lbl, req) =>
+  'cotizacion_defaults_' + lbl + (_tenantOf(req) === 'crazy' ? '__crazy' : '');
 
 // GET <prefix>/defaults — leer la plantilla guardada
 app.get(prefix + '/defaults', authMiddleware, closingsAccessMiddleware, async (req, res) => {
   try {
-    const v = await getConfig(_defaultsConfigKey(label), null);
+    const v = await getConfig(_defaultsConfigKey(label, req), null);
     res.json({ success: true, defaults: v || { teams: [] } });
   } catch (err) {
     logger.error(`GET ${prefix}/defaults (${label}): ${err.message}`);
@@ -1970,7 +1988,7 @@ app.post(prefix + '/defaults', authMiddleware, closingsAccessMiddleware, async (
         commissionPercent: Math.max(0, Math.min(100, Number(src.commissionPercent) || 0))
       });
     }
-    await setConfig(_defaultsConfigKey(label), { teams, savedAt: new Date(), savedBy: (req.user && req.user.username) || '' });
+    await setConfig(_defaultsConfigKey(label, req), { teams, savedAt: new Date(), savedBy: (req.user && req.user.username) || '' });
     res.json({ success: true });
   } catch (err) {
     logger.error(`POST ${prefix}/defaults (${label}): ${err.message}`);
@@ -1981,6 +1999,7 @@ app.post(prefix + '/defaults', authMiddleware, closingsAccessMiddleware, async (
 // POST <prefix> — crear una cotización para una fecha.
 app.post(prefix, authMiddleware, closingsAccessMiddleware, async (req, res) => {
   try {
+    const Model = _models(req)[modelKey];
     const body = req.body || {};
     const dateKey = String(body.dateKey || '').match(/^\d{4}-\d{2}-\d{2}$/) ? body.dateKey : null;
     if (!dateKey) return res.status(400).json({ error: 'Fecha inválida' });
@@ -1990,7 +2009,7 @@ app.post(prefix, authMiddleware, closingsAccessMiddleware, async (req, res) => {
 
     // Pre-rellenar con la plantilla guardada (si existe) — nombres y %
     // comisión. Los montos siempre arrancan en 0 (los carga el dueño).
-    const defaults = await getConfig(_defaultsConfigKey(label), null);
+    const defaults = await getConfig(_defaultsConfigKey(label, req), null);
     const defTeams = (defaults && Array.isArray(defaults.teams)) ? defaults.teams : [];
     const teams = Array.from({ length: 10 }, (_, i) => {
       const def = defTeams.find(t => Number(t.slot) === i) || {};
@@ -2028,6 +2047,7 @@ app.post(prefix, authMiddleware, closingsAccessMiddleware, async (req, res) => {
 // modificar equipos/rate/fecha hay que reabrirla primero con /:id/reopen.
 app.put(prefix + '/:id', authMiddleware, closingsAccessMiddleware, async (req, res) => {
   try {
+    const Model = _models(req)[modelKey];
     const id = String(req.params.id || '');
     const c = await Model.findOne({ id });
     if (!c) return res.status(404).json({ error: 'Cotización no encontrada' });
@@ -2081,6 +2101,7 @@ app.put(prefix + '/:id', authMiddleware, closingsAccessMiddleware, async (req, r
 // POST <prefix>/:id/close
 app.post(prefix + '/:id/close', authMiddleware, closingsAccessMiddleware, async (req, res) => {
   try {
+    const Model = _models(req)[modelKey];
     const id = String(req.params.id || '');
     const c = await Model.findOne({ id });
     if (!c) return res.status(404).json({ error: 'Cotización no encontrada' });
@@ -2099,6 +2120,7 @@ app.post(prefix + '/:id/close', authMiddleware, closingsAccessMiddleware, async 
 // POST <prefix>/:id/reopen
 app.post(prefix + '/:id/reopen', authMiddleware, closingsAccessMiddleware, async (req, res) => {
   try {
+    const Model = _models(req)[modelKey];
     const id = String(req.params.id || '');
     const c = await Model.findOne({ id });
     if (!c) return res.status(404).json({ error: 'Cotización no encontrada' });
@@ -2119,6 +2141,7 @@ app.post(prefix + '/:id/reopen', authMiddleware, closingsAccessMiddleware, async
 // cotizado de una" cuando ya pagaron todos juntos.
 app.post(prefix + '/:id/toggle', authMiddleware, closingsAccessMiddleware, async (req, res) => {
   try {
+    const Model = _models(req)[modelKey];
     const id = String(req.params.id || '');
     const c = await Model.findOne({ id });
     if (!c) return res.status(404).json({ error: 'Cotización no encontrada' });
@@ -2150,6 +2173,7 @@ app.post(prefix + '/:id/toggle', authMiddleware, closingsAccessMiddleware, async
 // todos los que tienen monto, la cotización completa pasa a "cotizada".
 app.post(prefix + '/:id/team/:slot/toggle', authMiddleware, closingsAccessMiddleware, async (req, res) => {
   try {
+    const Model = _models(req)[modelKey];
     const id = String(req.params.id || '');
     const slot = Number(req.params.slot);
     if (!Number.isInteger(slot) || slot < 0 || slot > 9) {
@@ -2191,6 +2215,7 @@ app.post(prefix + '/:id/team/:slot/toggle', authMiddleware, closingsAccessMiddle
 // POST <prefix>/:id/confirm — fija cotizado=true (idempotente).
 app.post(prefix + '/:id/confirm', authMiddleware, closingsAccessMiddleware, async (req, res) => {
   try {
+    const Model = _models(req)[modelKey];
     const id = String(req.params.id || '');
     const c = await Model.findOne({ id });
     if (!c) return res.status(404).json({ error: 'Cotización no encontrada' });
@@ -2210,6 +2235,7 @@ app.post(prefix + '/:id/confirm', authMiddleware, closingsAccessMiddleware, asyn
 // DELETE <prefix>/:id — borra (requiere PIN 1818).
 app.delete(prefix + '/:id', authMiddleware, closingsAccessMiddleware, async (req, res) => {
   try {
+    const Model = _models(req)[modelKey];
     const id = String(req.params.id || '');
     const pin = String(
       (req.query && req.query.pin) ||
@@ -2232,8 +2258,8 @@ app.delete(prefix + '/:id', authMiddleware, closingsAccessMiddleware, async (req
 } // _mountCotizacionRoutes
 
 // Montar las dos versiones: interna (Cotizaciones) y externa (Cotizaciones Externo)
-_mountCotizacionRoutes('/api/admin/cotizaciones', CotizacionEntry, 'cotizacion');
-_mountCotizacionRoutes('/api/admin/cotizaciones-externo', CotizacionExternaEntry, 'cotizacion-externa');
+_mountCotizacionRoutes('/api/admin/cotizaciones', 'CotizacionEntry', 'cotizacion');
+_mountCotizacionRoutes('/api/admin/cotizaciones-externo', 'CotizacionExternaEntry', 'cotizacion-externa');
 
 // GET /api/admin/active-users-count — count de users conectados por socket
 // AHORA. Para el badge verde pulsante en el sidebar del admin. Pollea cada
@@ -2266,6 +2292,44 @@ const EMP_DELETE_PIN = '1818';
 const EMP_SECTORS = ['ganamos', 'publicidad', 'buffalo'];
 const EMP_DIAS_MES = 30;
 const EMP_FRANCO_DAYS = ['lunes', 'martes', 'miercoles', 'jueves', 'viernes', 'sabado', 'domingo'];
+
+// ============================================================
+// DATOS SEPARADOS POR LOGIN (multi-tenant por colección)
+// ============================================================
+// ignite1000 trabaja sobre las colecciones base; el login `crazy` sobre
+// colecciones paralelas *_crazy (vacías → arranca en limpio). Reusan el
+// mismo schema (mismas validaciones e índices) pero los datos nunca se
+// mezclan: están en colecciones físicamente distintas.
+function _crazyModel(baseModel, crazyName, collection) {
+  return mongoose.models[crazyName] || mongoose.model(crazyName, baseModel.schema, collection);
+}
+const ClosingEntryCrazy           = _crazyModel(ClosingEntry, 'ClosingEntryCrazy', 'closingentries_crazy');
+const CotizacionEntryCrazy        = _crazyModel(CotizacionEntry, 'CotizacionEntryCrazy', 'cotizacionentries_crazy');
+const CotizacionExternaEntryCrazy = _crazyModel(CotizacionExternaEntry, 'CotizacionExternaEntryCrazy', 'cotizacionexternaentries_crazy');
+const EmployeeEntryCrazy          = _crazyModel(EmployeeEntry, 'EmployeeEntryCrazy', 'employeeentries_crazy');
+const EmployeeSectorConfigCrazy   = _crazyModel(EmployeeSectorConfig, 'EmployeeSectorConfigCrazy', 'employeesectorconfigs_crazy');
+const EmployeeClosingCrazy        = _crazyModel(EmployeeClosing, 'EmployeeClosingCrazy', 'employeeclosings_crazy');
+
+const _MODELS_MAIN = { ClosingEntry, CotizacionEntry, CotizacionExternaEntry, EmployeeEntry, EmployeeSectorConfig, EmployeeClosing };
+const _MODELS_CRAZY = {
+  ClosingEntry: ClosingEntryCrazy,
+  CotizacionEntry: CotizacionEntryCrazy,
+  CotizacionExternaEntry: CotizacionExternaEntryCrazy,
+  EmployeeEntry: EmployeeEntryCrazy,
+  EmployeeSectorConfig: EmployeeSectorConfigCrazy,
+  EmployeeClosing: EmployeeClosingCrazy
+};
+
+// Tenant del request: 'crazy' para el login crazy, 'main' para el resto.
+function _tenantOf(req) {
+  return (req && req.user && req.user.username === 'crazy') ? 'crazy' : 'main';
+}
+
+// Devuelve el set de modelos (Closing / Cotizacion / Employee...) que
+// corresponde al login del request. Cada ruta resuelve sus modelos así.
+function _models(req) {
+  return _tenantOf(req) === 'crazy' ? _MODELS_CRAZY : _MODELS_MAIN;
+}
 
 // Calcula el pago de un empleado. `sectorCfg` trae los feriados generales
 // del sector — se suman salvo los que el empleado tenga excluidos.
@@ -2325,7 +2389,8 @@ function _empCompute(e, sectorCfg) {
 
 // Trae las 3 configs de sector. Si una no existe todavía la devuelve
 // vacía en memoria (no persiste hasta que el owner la guarde).
-async function _empLoadSectorConfigs() {
+// Recibe el modelo del tenant (datos separados por login).
+async function _empLoadSectorConfigs(EmployeeSectorConfig) {
   const docs = await EmployeeSectorConfig.find({}).lean();
   const map = {};
   for (const s of EMP_SECTORS) {
@@ -2337,11 +2402,12 @@ async function _empLoadSectorConfigs() {
 // GET /api/admin/empleados[?sector=…]
 app.get('/api/admin/empleados', authMiddleware, closingsAccessMiddleware, async (req, res) => {
   try {
+    const { EmployeeEntry, EmployeeSectorConfig } = _models(req);
     const filter = {};
     if (EMP_SECTORS.includes(req.query.sector)) filter.sector = req.query.sector;
     const [rows, sectorConfigs] = await Promise.all([
       EmployeeEntry.find(filter).sort({ sector: 1, role: 1, name: 1 }).lean(),
-      _empLoadSectorConfigs()
+      _empLoadSectorConfigs(EmployeeSectorConfig)
     ]);
     const items = rows.map(r => ({ ...r, computed: _empCompute(r, sectorConfigs[r.sector]) }));
     res.json({ success: true, items, sectorConfigs });
@@ -2354,6 +2420,7 @@ app.get('/api/admin/empleados', authMiddleware, closingsAccessMiddleware, async 
 // POST /api/admin/empleados — crear empleado
 app.post('/api/admin/empleados', authMiddleware, closingsAccessMiddleware, async (req, res) => {
   try {
+    const { EmployeeEntry } = _models(req);
     const b = req.body || {};
     const sector = String(b.sector || '');
     if (!EMP_SECTORS.includes(sector)) return res.status(400).json({ error: 'Sector inválido' });
@@ -2391,7 +2458,8 @@ app.post('/api/admin/empleados', authMiddleware, closingsAccessMiddleware, async
 // Registrado ANTES de /:id para que no lo capture la ruta con parámetro.
 app.get('/api/admin/empleados/sector-config', authMiddleware, closingsAccessMiddleware, async (req, res) => {
   try {
-    const configs = await _empLoadSectorConfigs();
+    const { EmployeeSectorConfig } = _models(req);
+    const configs = await _empLoadSectorConfigs(EmployeeSectorConfig);
     res.json({ success: true, configs });
   } catch (err) {
     logger.error(`GET /api/admin/empleados/sector-config: ${err.message}`);
@@ -2402,6 +2470,7 @@ app.get('/api/admin/empleados/sector-config', authMiddleware, closingsAccessMidd
 // PUT /api/admin/empleados/sector-config — guardar config de un sector.
 app.put('/api/admin/empleados/sector-config', authMiddleware, closingsAccessMiddleware, async (req, res) => {
   try {
+    const { EmployeeSectorConfig } = _models(req);
     const b = req.body || {};
     const sector = String(b.sector || '');
     if (!EMP_SECTORS.includes(sector)) return res.status(400).json({ error: 'Sector inválido' });
@@ -2431,9 +2500,10 @@ app.put('/api/admin/empleados/sector-config', authMiddleware, closingsAccessMidd
 // historial y deja la hoja viva limpia de movimientos para el siguiente.
 app.post('/api/admin/empleados/cierre', authMiddleware, closingsAccessMiddleware, async (req, res) => {
   try {
+    const { EmployeeEntry, EmployeeSectorConfig, EmployeeClosing } = _models(req);
     const [rows, sectorConfigs] = await Promise.all([
       EmployeeEntry.find({}).sort({ sector: 1, role: 1, name: 1 }).lean(),
-      _empLoadSectorConfigs()
+      _empLoadSectorConfigs(EmployeeSectorConfig)
     ]);
     if (rows.length === 0) return res.status(400).json({ error: 'No hay empleados para cerrar.' });
 
@@ -2491,6 +2561,7 @@ app.post('/api/admin/empleados/cierre', authMiddleware, closingsAccessMiddleware
 // GET /api/admin/empleados/cierres — historial (resumen, sin el detalle).
 app.get('/api/admin/empleados/cierres', authMiddleware, closingsAccessMiddleware, async (req, res) => {
   try {
+    const { EmployeeClosing } = _models(req);
     const rows = await EmployeeClosing.find({}, {
       id: 1, periodLabel: 1, closedAt: 1, closedBy: 1, paid: 1, paidAt: 1,
       employeeCount: 1, grandTotalARS: 1, comisionesTotalARS: 1, costoTotalARS: 1,
@@ -2506,6 +2577,7 @@ app.get('/api/admin/empleados/cierres', authMiddleware, closingsAccessMiddleware
 // GET /api/admin/empleados/cierres/:id — detalle completo de un cierre.
 app.get('/api/admin/empleados/cierres/:id', authMiddleware, closingsAccessMiddleware, async (req, res) => {
   try {
+    const { EmployeeClosing } = _models(req);
     const c = await EmployeeClosing.findOne({ id: String(req.params.id || '') }).lean();
     if (!c) return res.status(404).json({ error: 'Cierre no encontrado' });
     res.json({ success: true, closing: c });
@@ -2518,6 +2590,7 @@ app.get('/api/admin/empleados/cierres/:id', authMiddleware, closingsAccessMiddle
 // POST /api/admin/empleados/cierres/:id/paid — tildar/destildar pagado.
 app.post('/api/admin/empleados/cierres/:id/paid', authMiddleware, closingsAccessMiddleware, async (req, res) => {
   try {
+    const { EmployeeClosing } = _models(req);
     const paid = !!(req.body && req.body.paid);
     const c = await EmployeeClosing.findOneAndUpdate(
       { id: String(req.params.id || '') },
@@ -2537,6 +2610,7 @@ app.post('/api/admin/empleados/cierres/:id/paid', authMiddleware, closingsAccess
 // historial. Para usar si se cerró con un error.
 app.post('/api/admin/empleados/cierres/:id/reabrir', authMiddleware, closingsAccessMiddleware, async (req, res) => {
   try {
+    const { EmployeeEntry, EmployeeSectorConfig, EmployeeClosing } = _models(req);
     const c = await EmployeeClosing.findOne({ id: String(req.params.id || '') }).lean();
     if (!c) return res.status(404).json({ error: 'Cierre no encontrado' });
 
@@ -2581,6 +2655,7 @@ app.post('/api/admin/empleados/cierres/:id/reabrir', authMiddleware, closingsAcc
 // PUT /api/admin/empleados/:id — actualizar
 app.put('/api/admin/empleados/:id', authMiddleware, closingsAccessMiddleware, async (req, res) => {
   try {
+    const { EmployeeEntry } = _models(req);
     const id = String(req.params.id || '');
     const e = await EmployeeEntry.findOne({ id });
     if (!e) return res.status(404).json({ error: 'Empleado no encontrado' });
@@ -2656,6 +2731,7 @@ app.put('/api/admin/empleados/:id', authMiddleware, closingsAccessMiddleware, as
 // DELETE /api/admin/empleados/:id — borrar (requiere PIN 1818)
 app.delete('/api/admin/empleados/:id', authMiddleware, closingsAccessMiddleware, async (req, res) => {
   try {
+    const { EmployeeEntry } = _models(req);
     const id = String(req.params.id || '');
     const pin = String(
       (req.query && req.query.pin) ||

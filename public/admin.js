@@ -176,7 +176,7 @@ async function handleLogin(e) {
             return;
         }
 
-        const adminRoles = ['admin', 'depositor', 'withdrawer', 'closings_viewer', 'sector_editor'];
+        const adminRoles = ['admin', 'depositor', 'withdrawer', 'closings_viewer'];
         if (!adminRoles.includes(data.user && data.user.role)) {
             errEl.textContent = 'Tu cuenta no tiene permisos de administrador';
             return;
@@ -231,13 +231,6 @@ function startActiveUsersBadge() {
 }
 
 function showApp() {
-    // Usuario `crazy` (rol sector_editor): no entra al panel, va directo
-    // a la pantalla restringida para renombrar los sectores.
-    if (currentAdmin && currentAdmin.role === 'sector_editor') {
-        _showSectorEditorScreen();
-        return;
-    }
-
     document.getElementById('loginScreen').classList.add('hidden');
     document.getElementById('app').classList.remove('hidden');
     const nameEl = document.getElementById('adminName');
@@ -496,7 +489,7 @@ document.addEventListener('DOMContentLoaded', function () {
         }).then(async (r) => {
             if (!r.ok) throw new Error('invalid');
             const data = await r.json();
-            const adminRoles = ['admin', 'depositor', 'withdrawer', 'closings_viewer', 'sector_editor'];
+            const adminRoles = ['admin', 'depositor', 'withdrawer', 'closings_viewer'];
             if (!adminRoles.includes(data.role)) throw new Error('not admin');
             currentAdmin = data;
             showApp();
@@ -511,10 +504,12 @@ document.addEventListener('DOMContentLoaded', function () {
 // ============================================
 // CIERRES GENERAL — estado y configuración
 // ============================================
+// Cantidad de equipos por sector en los cierres (slots 0..N-1).
+const BUFFALO_TEAM_SLOTS = 10;
 const CLOSING_SECTORS_UI = [
-    { key: 'ganamos',    label: '💼 GANAMOS',    color: '#25d366', individual: true,  slots: 7 },
-    { key: 'publicidad', label: '📢 PUBLICIDAD', color: '#00d4ff', individual: true,  slots: 7 },
-    { key: 'buffalo',    label: '🐃 BUFFALO',    color: '#ffd700', individual: true,  slots: 7 }
+    { key: 'ganamos',    label: '💼 GANAMOS',    color: '#25d366', individual: true,  slots: BUFFALO_TEAM_SLOTS },
+    { key: 'publicidad', label: '📢 PUBLICIDAD', color: '#00d4ff', individual: true,  slots: BUFFALO_TEAM_SLOTS },
+    { key: 'buffalo',    label: '🐃 BUFFALO',    color: '#ffd700', individual: true,  slots: BUFFALO_TEAM_SLOTS }
 ];
 
 // ============================================
@@ -551,45 +546,41 @@ async function _loadSectorNames() {
     } catch (_) {}
 }
 
-// Pantalla restringida del usuario `crazy`: solo renombrar los 3 sectores.
-async function _showSectorEditorScreen() {
-    document.getElementById('loginScreen').classList.add('hidden');
-    document.getElementById('app').classList.add('hidden');
-    document.getElementById('sectorEditorScreen')?.remove();
-
-    let names = { ganamos: 'GANAMOS', publicidad: 'PUBLICIDAD', buffalo: 'BUFFALO' };
+// Modal para renombrar los 3 sectores desde el panel (botón en Cierres).
+async function _openSectorRenameModal() {
+    document.getElementById('sectorRenameModal')?.remove();
+    let names = Object.assign({}, _sectorNames);
     try {
         const r = await authFetch('/api/admin/sector-names');
         const d = await r.json();
         if (r.ok && d && d.names) names = d.names;
     } catch (_) {}
-
-    const screen = document.createElement('div');
-    screen.id = 'sectorEditorScreen';
-    screen.style.cssText = 'position:fixed;inset:0;background:linear-gradient(160deg,#0a0014,#1a0033);z-index:9000;display:flex;align-items:center;justify-content:center;padding:20px;overflow:auto;';
-    const row = (k, n) => '<div style="margin-bottom:14px;">' +
-        '<label style="display:block;color:#aaa;font-size:11px;text-transform:uppercase;letter-spacing:0.6px;margin-bottom:5px;">' + _SECTOR_EMOJI[k] + ' Sector ' + n + '</label>' +
-        '<input type="text" id="secName_' + k + '" maxlength="24" value="' + escapeHtml(names[k] || '') + '" style="width:100%;background:#0a0a0a;color:#fff;border:1.5px solid rgba(212,175,55,0.40);padding:10px 14px;border-radius:8px;font-size:15px;font-weight:800;box-sizing:border-box;">' +
+    const overlay = document.createElement('div');
+    overlay.id = 'sectorRenameModal';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:99999;display:flex;align-items:center;justify-content:center;padding:20px;';
+    const row = (k, n) => '<div style="margin-bottom:12px;">' +
+        '<label style="display:block;color:#aaa;font-size:10.5px;text-transform:uppercase;letter-spacing:0.6px;margin-bottom:4px;">' + _SECTOR_EMOJI[k] + ' Sector ' + n + '</label>' +
+        '<input type="text" id="secRename_' + k + '" maxlength="24" value="' + escapeHtml(names[k] || '') + '" style="width:100%;background:#0a0a0a;color:#fff;border:1.5px solid rgba(212,175,55,0.40);padding:9px 12px;border-radius:8px;font-size:14px;font-weight:800;box-sizing:border-box;">' +
         '</div>';
-    screen.innerHTML = '<div style="background:#1a0033;border:1.5px solid #d4af37;border-radius:16px;padding:26px;max-width:420px;width:100%;color:#fff;box-shadow:0 0 50px rgba(212,175,55,0.25);">' +
-        '<div style="text-align:center;margin-bottom:20px;">' +
-        '<div style="font-size:36px;">🏷️</div>' +
-        '<h2 style="margin:6px 0 2px;color:#d4af37;font-size:18px;">Nombres de sectores</h2>' +
-        '<div style="color:#999;font-size:11.5px;">Editá cómo se llaman los 3 sectores. El cambio se ve en todo el panel.</div>' +
+    overlay.innerHTML = '<div style="background:#1a0033;border:1.5px solid #d4af37;border-radius:14px;padding:22px;max-width:380px;width:100%;color:#fff;box-shadow:0 0 40px rgba(212,175,55,0.30);">' +
+        '<div style="text-align:center;margin-bottom:14px;">' +
+        '<div style="font-size:30px;">🏷️</div>' +
+        '<h3 style="margin:4px 0 2px;color:#d4af37;font-size:16px;">Renombrar sectores</h3>' +
+        '<div style="color:#999;font-size:11px;">Cambia el nombre que se muestra en Cierres y Empleados.</div>' +
         '</div>' +
         row('ganamos', '1') + row('publicidad', '2') + row('buffalo', '3') +
-        '<div id="secEditMsg" style="min-height:16px;font-size:12px;text-align:center;margin:4px 0 10px;"></div>' +
-        '<button type="button" id="secEditSave" style="width:100%;background:linear-gradient(135deg,#d4af37,#f4d966);color:#1a0033;border:none;padding:12px;border-radius:9px;font-weight:900;font-size:14px;cursor:pointer;letter-spacing:0.5px;">💾 GUARDAR</button>' +
-        '<button type="button" id="secEditLogout" style="width:100%;background:transparent;color:#888;border:none;padding:10px;margin-top:8px;font-size:12px;cursor:pointer;text-decoration:underline;">Cerrar sesión</button>' +
-        '</div>';
-    document.body.appendChild(screen);
-
-    document.getElementById('secEditSave').onclick = async () => {
-        const msg = document.getElementById('secEditMsg');
+        '<div id="secRenameMsg" style="min-height:15px;font-size:12px;text-align:center;margin:2px 0 10px;"></div>' +
+        '<div style="display:flex;gap:8px;">' +
+        '<button type="button" onclick="document.getElementById(\'sectorRenameModal\').remove()" style="flex:1;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.20);color:#fff;padding:9px;border-radius:8px;font-weight:700;cursor:pointer;">Cancelar</button>' +
+        '<button type="button" id="secRenameSave" style="flex:2;background:linear-gradient(135deg,#d4af37,#f4d966);color:#1a0033;border:none;padding:9px;border-radius:8px;font-weight:900;cursor:pointer;">💾 Guardar</button>' +
+        '</div></div>';
+    document.body.appendChild(overlay);
+    document.getElementById('secRenameSave').onclick = async () => {
+        const msg = document.getElementById('secRenameMsg');
         const payload = {
-            ganamos:    (document.getElementById('secName_ganamos').value || '').trim(),
-            publicidad: (document.getElementById('secName_publicidad').value || '').trim(),
-            buffalo:    (document.getElementById('secName_buffalo').value || '').trim()
+            ganamos:    (document.getElementById('secRename_ganamos').value || '').trim(),
+            publicidad: (document.getElementById('secRename_publicidad').value || '').trim(),
+            buffalo:    (document.getElementById('secRename_buffalo').value || '').trim()
         };
         if (!payload.ganamos || !payload.publicidad || !payload.buffalo) {
             msg.style.color = '#ff8080'; msg.textContent = 'Completá los 3 nombres'; return;
@@ -603,14 +594,18 @@ async function _showSectorEditorScreen() {
             });
             const d = await r.json();
             if (!r.ok || !d.success) { msg.style.color = '#ff8080'; msg.textContent = '❌ ' + (d.error || 'Error'); return; }
-            msg.style.color = '#66ff99'; msg.textContent = '✅ Guardado';
+            _applySectorNames(d.names || payload);
+            overlay.remove();
+            try { showToast('✅ Nombres actualizados', 'success'); } catch (_) {}
+            // Re-render de la sección activa para reflejar los nombres nuevos.
+            try {
+                const active = document.querySelector('.nav-item.active');
+                const key = active && active.getAttribute('data-section');
+                if (key) showSection(key);
+            } catch (_) {}
         } catch (e) {
             msg.style.color = '#ff8080'; msg.textContent = 'Error de conexión';
         }
-    };
-    document.getElementById('secEditLogout').onclick = () => {
-        document.getElementById('sectorEditorScreen')?.remove();
-        handleLogout();
     };
 }
 
@@ -666,7 +661,7 @@ function _autoPendienteAnterior(date, sectorKey) {
 //   rid       — id del cierre (si empieza con "new_" el botón pide guardar)
 //   row       — row del cierre actual (para contar fotos ya subidas)
 //   kind      — categoría ('deposito', 'bajada', 'ingreso', etc.)
-//   teamSlot  — slot del equipo (0..6) o null si general
+//   teamSlot  — slot del equipo (0..9) o null si general
 //   label     — texto del botón ('📷 Foto', etc.)
 //   locked    — si el cierre está bloqueado, deshabilita
 function _inlineUploadBtn(rid, row, kind, teamSlot, label, locked) {
@@ -718,14 +713,14 @@ function _inlineUploadList(rid, row, kind, teamSlot, locked) {
 // Busca los nombres de equipo más recientes para un sector. Recorre el
 // cache de cierres (orden cronológico inverso) y para CADA slot toma el
 // primer nombre no vacío que encuentra. Así si en un día puntual no se
-// llenó el nombre, hereda el del cierre anterior. Devuelve array[7].
+// llenó el nombre, hereda el del cierre anterior. Devuelve array[BUFFALO_TEAM_SLOTS].
 function _latestTeamNames(sectorKey, excludeId) {
-    const out = ['', '', '', '', '', '', ''];
+    const out = Array.from({ length: BUFFALO_TEAM_SLOTS }, () => '');
     const rows = (_closingsRowsCache || [])
         .filter(r => r && r.sector === sectorKey && Array.isArray(r.teams) && r.id !== excludeId)
         .sort((a, b) => b.dateKey.localeCompare(a.dateKey)); // más reciente primero
     for (const r of rows) {
-        for (let i = 0; i < 7; i++) {
+        for (let i = 0; i < BUFFALO_TEAM_SLOTS; i++) {
             if (out[i]) continue;
             const t = r.teams.find(tt => Number(tt.slot) === i);
             if (t && String(t.name || '').trim()) {
@@ -1356,7 +1351,7 @@ function _renderClosings() {
     }
 
     // ===== Selector de sector =====
-    html += '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;">';
+    html += '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;align-items:center;">';
     for (const s of CLOSING_SECTORS_UI) {
         const active = s.key === _closingsView.sector;
         const bg = active ? s.color : 'rgba(255,255,255,0.04)';
@@ -1364,6 +1359,8 @@ function _renderClosings() {
         const border = active ? s.color : (s.color + '55');
         html += '<button type="button" onclick="closingsSelectSector(\'' + s.key + '\')" style="flex:1;min-width:130px;background:' + bg + ';color:' + color + ';border:1.5px solid ' + border + ';padding:9px 12px;border-radius:9px;font-weight:900;font-size:12.5px;letter-spacing:0.4px;cursor:pointer;">' + s.label + '</button>';
     }
+    // Botón para renombrar los 3 sectores (abre modal).
+    html += '<button type="button" onclick="_openSectorRenameModal()" title="Renombrar los sectores" style="background:rgba(255,255,255,0.04);color:#d4af37;border:1.5px solid rgba(212,175,55,0.45);padding:9px 12px;border-radius:9px;font-weight:900;font-size:12.5px;cursor:pointer;">✏️ Nombres</button>';
     html += '</div>';
 
     // ===== Selector de día (visible solo para el editor) =====
@@ -2212,10 +2209,10 @@ function _renderClosingExtras(rid, row, locked) {
     return html;
 }
 
-// Sector con 7 equipos (Buffalo o Ganamos). Una entry por día.
+// Sector con hasta 10 equipos (Buffalo o Ganamos). Una entry por día.
 // Generales arriba (% banco + pendiente a completar + depósitos totales
-// y transacciones totales COMPUTADOS de los 7 equipos). Abajo los 7
-// equipos con sus campos individuales.
+// y transacciones totales COMPUTADOS de los equipos). Abajo los equipos
+// con sus campos individuales.
 // Neto = Σ(ventas) − Σ(cargas × banco%). Bonificaciones no afectan neto.
 function _renderTeamSectorEntry(sec, date, row) {
     const exists = !!row;
@@ -2227,10 +2224,15 @@ function _renderTeamSectorEntry(sec, date, row) {
     // que tenga nombres de equipo y los usamos como default. Editable después.
     const recentNames = _latestTeamNames(sec.key, row ? row.id : null);
     let teams;
-    if (row && Array.isArray(row.teams) && row.teams.length === 7) {
-        teams = row.teams;
+    if (row && Array.isArray(row.teams) && row.teams.length > 0) {
+        // Usar los equipos cargados y completar hasta BUFFALO_TEAM_SLOTS
+        // (cubre cierres viejos que se guardaron con menos equipos).
+        teams = row.teams.slice();
+        for (let i = teams.length; i < BUFFALO_TEAM_SLOTS; i++) {
+            teams.push({ slot: i, name: recentNames[i] || '', depositsARS: 0, depositsCount: 0, ventasARS: 0, bonusARS: 0, bonusCount: 0, withdrawalsCount: 0 });
+        }
     } else {
-        teams = Array.from({ length: 7 }, (_, i) => ({ slot: i, name: recentNames[i] || '', depositsARS: 0, depositsCount: 0, ventasARS: 0, bonusARS: 0, bonusCount: 0, withdrawalsCount: 0 }));
+        teams = Array.from({ length: BUFFALO_TEAM_SLOTS }, (_, i) => ({ slot: i, name: recentNames[i] || '', depositsARS: 0, depositsCount: 0, ventasARS: 0, bonusARS: 0, bonusCount: 0, withdrawalsCount: 0 }));
         // Migración legacy: cierres viejos de publicidad/ganamos sin teams[]
         // tenían los totales guardados en el row top-level. Los cargamos en
         // el slot 1 para no perder data si el dueño abre y guarda sin tocar.
@@ -2262,7 +2264,7 @@ function _renderTeamSectorEntry(sec, date, row) {
     // === Preview en vivo (se rellena por closingsRecompute) ===
     html += '<div id="cls_' + rid + '_preview" style="margin-bottom:11px;"></div>';
 
-    // Computed (suma de los 7 equipos).
+    // Computed (suma de los equipos).
     // `sumVentas` = total cash-outs (lo que pagamos a los ganadores) —
     //               guardado en el field ventasARS. El dueño llama a esto
     //               VENTA en la UI.
@@ -2316,7 +2318,7 @@ function _renderTeamSectorEntry(sec, date, row) {
     // === EQUIPOS (individual) ===
     html += '<div style="background:rgba(255,215,0,0.04);border:1.5px solid rgba(255,215,0,0.35);border-radius:9px;padding:11px;margin-bottom:11px;">';
     html += '<div style="color:#ffd700;font-weight:900;font-size:11px;letter-spacing:1px;margin-bottom:8px;">🎯 POR EQUIPO (individual cada uno)</div>';
-    for (let i = 0; i < 7; i++) {
+    for (let i = 0; i < BUFFALO_TEAM_SLOTS; i++) {
         const t = teams[i] || { slot: i, name: '', depositsARS: 0, depositsCount: 0, ventasARS: 0, bonusARS: 0, bonusCount: 0, withdrawalsCount: 0 };
         html += '<div style="background:rgba(0,0,0,0.30);border:1px solid rgba(255,255,255,0.06);border-radius:8px;padding:8px;margin-bottom:6px;">';
         // Header: número + nombre del equipo + botón de foto
@@ -2438,7 +2440,7 @@ async function saveTeamSectorClosing(rid, date, sector) {
         return el ? el.value : '';
     };
     const teams = [];
-    for (let i = 0; i < 7; i++) {
+    for (let i = 0; i < BUFFALO_TEAM_SLOTS; i++) {
         const find = (field) => {
             const sel = '[data-cls-id="' + rid + '"] [data-buffalo-team="' + i + '"][data-field="' + field + '"]';
             const el = document.querySelector(sel);

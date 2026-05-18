@@ -10,7 +10,7 @@
  *   - si quedó pendiente, comprobante del banco que muestre que la plata
  *     sigue ahí (sino se considera plata faltante)
  *
- * Sectores: ganamos | publicidad | buffalo (este último tiene 7 slots
+ * Sectores: ganamos | publicidad | buffalo (cada uno con hasta 10 slots
  * de equipo individual, con nombre editable).
  *
  * Reglas:
@@ -28,12 +28,12 @@ const editEntrySchema = new mongoose.Schema({
   after: { type: mongoose.Schema.Types.Mixed }
 }, { _id: false });
 
-// Sub-equipo para sector Buffalo. Buffalo tiene 7 equipos pero comparte
+// Sub-equipo para sector Buffalo. Buffalo tiene hasta 10 equipos pero comparte
 // algunos datos (% banco, bajada, pendiente, descargas) porque la bajada
 // se hace UNA sola vez desde un mismo banco. Lo demás (depositos, ventas,
 // bonos, transacciones) sí es individual por equipo.
 const buffaloTeamSchema = new mongoose.Schema({
-  slot: { type: Number, required: true, min: 0, max: 6 },
+  slot: { type: Number, required: true, min: 0, max: 9 },
   name: { type: String, default: '', trim: true },
   depositsARS: { type: Number, default: 0, min: 0 },       // cargas $
   depositsCount: { type: Number, default: 0, min: 0 },     // cargas # (count of deposits)
@@ -65,9 +65,9 @@ const comprobanteSchema = new mongoose.Schema({
     enum: ['deposito', 'venta', 'bonificacion', 'bajada', 'pendiente_bank', 'ingreso', 'egreso', 'gasto'],
     default: 'deposito'
   },
-  // Slot del equipo asociado (0..6) — opcional. Cuando es null/undefined,
+  // Slot del equipo asociado (0..9) — opcional. Cuando es null/undefined,
   // el comprobante aplica al sector completo, no a un equipo puntual.
-  teamSlot: { type: Number, default: null, min: 0, max: 6 },
+  teamSlot: { type: Number, default: null, min: 0, max: 9 },
   note: { type: String, default: '' },
   uploadedAt: { type: Date, default: Date.now },
   uploadedBy: { type: String, default: '' }
@@ -86,11 +86,11 @@ const closingSchema = new mongoose.Schema({
     index: true
   },
 
-  // Solo para sector 'buffalo': qué slot de equipo (0-6) y nombre editable.
+  // Solo para sector 'buffalo': qué slot de equipo (0-9) y nombre editable.
   // El nombre se persiste en cada cierre para que aunque el owner lo
   // cambie en config, los cierres viejos mantengan el nombre con el que
   // se cargaron.
-  teamSlot: { type: Number, default: null }, // 0..6 para buffalo
+  teamSlot: { type: Number, default: null }, // 0..9 para buffalo
   teamName: { type: String, default: '', trim: true },
 
   // === Plata que entra ===
@@ -152,7 +152,7 @@ const closingSchema = new mongoose.Schema({
   // bonus promedio (bonusARS / bonusCount) y cuántos clientes recibieron.
   bonusCount: { type: Number, default: 0, min: 0 },
 
-  // Sólo para sector Buffalo: array de 7 equipos. Los campos
+  // Sólo para sector Buffalo: array de hasta 10 equipos. Los campos
   // depositsARS/ventasARS/bonusARS/bonusCount/transactionsCount del padre
   // se calculan como suma de los teams (no se editan directo). Los campos
   // bankMarginPercent/bajadaARS/pendienteAnteriorARS/withdrawalsCount del
