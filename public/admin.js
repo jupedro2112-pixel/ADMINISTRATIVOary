@@ -4777,18 +4777,42 @@ async function deleteEmpleado(id) {
 }
 
 // ============================================================
-// PUBLICIDAD — publicistas, envíos de plata y cierres diarios
+// PUBLICIDAD — agencias, envíos de plata y cierres diarios
 // ============================================================
-// Cada publicista tiene envios[] (plata mandada, con detalle) y cierres[]
-// diarios de campaña (consumo, mensajes, derivados, costo/msj). El % de
-// conversión se calcula acá: derivados / mensajes × 100.
+// Cada agencia tiene config (moneda pesos/USDT + valor de conversión,
+// tipo de comisión y su valor), envios[] (plata mandada con detalle) y
+// cierres[] diarios (consumo, mensajes, derivados). La comisión y el %
+// de conversión se calculan acá según la config de la agencia.
 let _publicistasCache = [];
 const _pubExpanded = {};
 const _pubInp = 'background:rgba(0,0,0,0.45);border:1px solid rgba(255,255,255,0.14);color:#fff;padding:5px 7px;border-radius:5px;font-size:11.5px;box-sizing:border-box;width:100%;';
+const _pubSel = 'background:rgba(0,0,0,0.55);border:1px solid rgba(255,255,255,0.18);color:#fff;padding:5px 7px;border-radius:5px;font-size:11.5px;box-sizing:border-box;';
 
 function _pubFmt(n) { return '$' + Math.round(Number(n) || 0).toLocaleString('es-AR'); }
 function _pubToday() {
     return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Argentina/Buenos_Aires', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+}
+// Formato corto para celdas: símbolo + número en la moneda de la agencia.
+function _pubMon(moneda, n) {
+    n = Number(n) || 0;
+    return (moneda === 'usdt')
+        ? 'U$D ' + n.toLocaleString('es-AR', { maximumFractionDigits: 2 })
+        : '$' + Math.round(n).toLocaleString('es-AR');
+}
+// Formato largo: agrega el equivalente en pesos si la moneda es USDT.
+function _pubMonEq(p, n) {
+    n = Number(n) || 0;
+    let s = _pubMon(p.moneda, n);
+    if (p.moneda === 'usdt' && (Number(p.usdtRate) || 0) > 0) {
+        s += ' (≈$' + Math.round(n * p.usdtRate).toLocaleString('es-AR') + ')';
+    }
+    return s;
+}
+// Comisión de un cierre según la config de la agencia.
+function _pubComision(p, c) {
+    const cv = Number(p.comisionValor) || 0;
+    if (p.comisionTipo === 'por_mensaje') return (Number(c.mensajes) || 0) * cv;
+    return (Number(c.consumoARS) || 0) * cv / 100; // porcentaje sobre el consumo
 }
 
 async function loadPublicistas() {
@@ -4814,11 +4838,11 @@ function _renderPublicistas() {
     if (!body) return;
     let h = '';
     h += '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:14px;">';
-    h += '<input id="pubNuevoNombre" type="text" maxlength="100" placeholder="Nombre del publicista" onkeydown="if(event.key===\'Enter\')crearPublicista()" style="flex:1;min-width:200px;background:rgba(0,0,0,0.45);border:1px solid rgba(255,128,0,0.40);color:#fff;padding:9px 12px;border-radius:8px;font-size:13px;box-sizing:border-box;">';
-    h += '<button type="button" onclick="crearPublicista()" style="background:linear-gradient(135deg,#ff8000,#ffaa44);color:#000;border:none;padding:9px 18px;border-radius:8px;font-weight:900;font-size:12.5px;cursor:pointer;">➕ Agregar publicista</button>';
+    h += '<input id="pubNuevoNombre" type="text" maxlength="100" placeholder="Nombre de la agencia / publicista" onkeydown="if(event.key===\'Enter\')crearPublicista()" style="flex:1;min-width:200px;background:rgba(0,0,0,0.45);border:1px solid rgba(255,128,0,0.40);color:#fff;padding:9px 12px;border-radius:8px;font-size:13px;box-sizing:border-box;">';
+    h += '<button type="button" onclick="crearPublicista()" style="background:linear-gradient(135deg,#ff8000,#ffaa44);color:#000;border:none;padding:9px 18px;border-radius:8px;font-weight:900;font-size:12.5px;cursor:pointer;">➕ Agregar agencia</button>';
     h += '</div>';
     if (_publicistasCache.length === 0) {
-        h += '<div style="color:#888;text-align:center;padding:24px;font-size:12.5px;">No hay publicistas todavía. Agregá el primero arriba.</div>';
+        h += '<div style="color:#888;text-align:center;padding:24px;font-size:12.5px;">No hay agencias todavía. Agregá la primera arriba.</div>';
     } else {
         for (const p of _publicistasCache) h += _renderPublicistaCard(p);
     }
@@ -4830,17 +4854,20 @@ function _renderPublicistaCard(p) {
     const cierres = Array.isArray(p.cierres) ? p.cierres : [];
     const totalEnviado = envios.reduce((s, e) => s + (Number(e.montoARS) || 0), 0);
     const totalConsumido = cierres.reduce((s, c) => s + (Number(c.consumoARS) || 0), 0);
+    const totalComision = cierres.reduce((s, c) => s + _pubComision(p, c), 0);
     const expanded = !!_pubExpanded[p.id];
     const pid = escapeHtml(p.id);
     let h = '<div data-pub-card="' + pid + '" style="background:rgba(0,0,0,0.30);border:1.5px solid rgba(255,128,0,0.35);border-radius:11px;padding:13px;margin-bottom:12px;">';
     h += '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">';
     h += '<span onclick="_pubToggle(\'' + pid + '\')" style="color:#ff8000;font-size:13px;cursor:pointer;">' + (expanded ? '▼' : '▶') + '</span>';
     h += '<input data-pub-field="nombre" type="text" value="' + escapeHtml(p.nombre || '') + '" maxlength="100" style="background:rgba(0,0,0,0.40);border:1px solid rgba(255,255,255,0.12);color:#fff;font-weight:900;font-size:13px;padding:5px 9px;border-radius:6px;flex:1;min-width:140px;">';
-    h += '<span style="color:#ffaa66;font-size:11px;font-weight:800;white-space:nowrap;">📤 ' + _pubFmt(totalEnviado) + '</span>';
-    h += '<span style="color:#aaffaa;font-size:11px;font-weight:800;white-space:nowrap;">🔥 ' + _pubFmt(totalConsumido) + '</span>';
+    h += '<span style="color:#ffaa66;font-size:11px;font-weight:800;white-space:nowrap;">📤 ' + escapeHtml(_pubMonEq(p, totalEnviado)) + '</span>';
+    h += '<span style="color:#aaffaa;font-size:11px;font-weight:800;white-space:nowrap;">🔥 ' + escapeHtml(_pubMonEq(p, totalConsumido)) + '</span>';
+    h += '<span style="color:#ffd700;font-size:11px;font-weight:800;white-space:nowrap;">💸 ' + escapeHtml(_pubMonEq(p, totalComision)) + '</span>';
     h += '<button type="button" onclick="borrarPublicista(\'' + pid + '\')" style="background:rgba(255,80,80,0.10);color:#f55;border:1px solid rgba(255,80,80,0.30);padding:4px 9px;border-radius:6px;font-weight:800;font-size:10.5px;cursor:pointer;">🗑</button>';
     h += '</div>';
     if (expanded) {
+        h += _renderPubConfig(p);
         h += _renderPubEnvios(p, envios);
         h += _renderPubCierres(p, cierres);
         h += '<div style="margin-top:10px;text-align:right;">';
@@ -4851,10 +4878,37 @@ function _renderPublicistaCard(p) {
     return h;
 }
 
+function _renderPubConfig(p) {
+    const pid = escapeHtml(p.id);
+    const esUsdt = p.moneda === 'usdt';
+    const esPorMsj = p.comisionTipo === 'por_mensaje';
+    let h = '<div style="margin-top:12px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.12);border-radius:9px;padding:10px;">';
+    h += '<div style="color:#ccc;font-weight:900;font-size:11px;letter-spacing:0.5px;margin-bottom:8px;">⚙️ CONFIGURACIÓN DE LA AGENCIA</div>';
+    h += '<div style="display:flex;gap:14px;flex-wrap:wrap;">';
+    h += '<div><label style="display:block;color:#888;font-size:9.5px;text-transform:uppercase;font-weight:700;margin-bottom:3px;">Moneda</label>';
+    h += '<select data-pub-field="moneda" onchange="_pubCfgChanged(\'' + pid + '\')" style="' + _pubSel + '">';
+    h += '<option value="pesos"' + (!esUsdt ? ' selected' : '') + '>Pesos</option>';
+    h += '<option value="usdt"' + (esUsdt ? ' selected' : '') + '>USDT</option>';
+    h += '</select></div>';
+    if (esUsdt) {
+        h += '<div><label style="display:block;color:#888;font-size:9.5px;text-transform:uppercase;font-weight:700;margin-bottom:3px;">Valor USDT (ARS)</label>';
+        h += '<input data-pub-field="usdtRate" type="number" min="0" step="1" value="' + (Number(p.usdtRate) || 0) + '" oninput="_pubRecalc(\'' + pid + '\')" placeholder="ej: 1200" style="' + _pubInp + 'width:120px;"></div>';
+    }
+    h += '<div><label style="display:block;color:#888;font-size:9.5px;text-transform:uppercase;font-weight:700;margin-bottom:3px;">Cómo cobra la comisión</label>';
+    h += '<select data-pub-field="comisionTipo" onchange="_pubCfgChanged(\'' + pid + '\')" style="' + _pubSel + '">';
+    h += '<option value="porcentaje"' + (!esPorMsj ? ' selected' : '') + '>% sobre el consumo</option>';
+    h += '<option value="por_mensaje"' + (esPorMsj ? ' selected' : '') + '>Monto por mensaje recibido</option>';
+    h += '</select></div>';
+    h += '<div><label style="display:block;color:#888;font-size:9.5px;text-transform:uppercase;font-weight:700;margin-bottom:3px;">' + (esPorMsj ? 'Costo por mensaje' : 'Porcentaje (%)') + '</label>';
+    h += '<input data-pub-field="comisionValor" type="number" min="0" step="' + (esPorMsj ? '1' : '0.5') + '" value="' + (Number(p.comisionValor) || 0) + '" oninput="_pubRecalc(\'' + pid + '\')" placeholder="' + (esPorMsj ? 'ej: 50' : 'ej: 10') + '" style="' + _pubInp + 'width:120px;"></div>';
+    h += '</div></div>';
+    return h;
+}
+
 function _renderPubEnvios(p, envios) {
     const pid = escapeHtml(p.id);
     const cols = '120px 120px 1fr 30px';
-    let h = '<div style="margin-top:12px;background:rgba(255,128,0,0.05);border:1px solid rgba(255,128,0,0.25);border-radius:9px;padding:10px;">';
+    let h = '<div style="margin-top:10px;background:rgba(255,128,0,0.05);border:1px solid rgba(255,128,0,0.25);border-radius:9px;padding:10px;">';
     h += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:7px;">';
     h += '<span style="color:#ffaa66;font-weight:900;font-size:11px;letter-spacing:0.5px;">📤 ENVÍOS DE PLATA</span>';
     h += '<button type="button" onclick="pubAddEnvio(\'' + pid + '\')" style="background:rgba(255,128,0,0.15);color:#ffaa66;border:1px solid rgba(255,128,0,0.45);padding:3px 10px;border-radius:6px;font-weight:800;font-size:10.5px;cursor:pointer;">➕ Envío</button>';
@@ -4863,18 +4917,18 @@ function _renderPubEnvios(p, envios) {
         h += '<div style="color:#777;font-size:10.5px;padding:3px;">Sin envíos cargados.</div>';
     } else {
         h += '<div style="display:grid;grid-template-columns:' + cols + ';gap:6px;font-size:9px;color:#888;text-transform:uppercase;font-weight:700;margin-bottom:4px;">';
-        h += '<div>Fecha</div><div>Monto $</div><div>Detalle (líneas API, etc.)</div><div></div></div>';
+        h += '<div>Fecha</div><div>Monto (' + (p.moneda === 'usdt' ? 'USDT' : '$') + ')</div><div>Detalle (líneas API, etc.)</div><div></div></div>';
         for (const e of envios) {
             const eid = escapeHtml(e.id);
             h += '<div style="display:grid;grid-template-columns:' + cols + ';gap:6px;margin-bottom:4px;">';
             h += '<input data-envio-id="' + eid + '" data-field="fecha" type="date" value="' + escapeHtml(e.fecha || '') + '" style="' + _pubInp + '">';
-            h += '<input data-envio-id="' + eid + '" data-field="montoARS" type="number" min="0" step="1000" value="' + (Number(e.montoARS) || 0) + '" style="' + _pubInp + '">';
+            h += '<input data-envio-id="' + eid + '" data-field="montoARS" type="number" min="0" step="1" value="' + (Number(e.montoARS) || 0) + '" oninput="_pubRecalc(\'' + pid + '\')" style="' + _pubInp + '">';
             h += '<input data-envio-id="' + eid + '" data-field="detalle" type="text" maxlength="200" value="' + escapeHtml(e.detalle || '') + '" placeholder="qué se pagó" style="' + _pubInp + '">';
             h += '<button type="button" onclick="pubDelEnvio(\'' + pid + '\',\'' + eid + '\')" style="background:rgba(255,80,80,0.10);color:#f55;border:1px solid rgba(255,80,80,0.30);border-radius:5px;cursor:pointer;font-size:10px;">✕</button>';
             h += '</div>';
         }
         const tot = envios.reduce((s, e) => s + (Number(e.montoARS) || 0), 0);
-        h += '<div style="text-align:right;color:#ffaa66;font-size:11px;font-weight:900;margin-top:4px;">Total enviado: ' + _pubFmt(tot) + '</div>';
+        h += '<div style="text-align:right;color:#ffaa66;font-size:11px;font-weight:900;margin-top:4px;" id="pubTotEnv_' + pid + '">Total enviado: ' + escapeHtml(_pubMonEq(p, tot)) + '</div>';
     }
     h += '</div>';
     return h;
@@ -4882,7 +4936,8 @@ function _renderPubEnvios(p, envios) {
 
 function _renderPubCierres(p, cierres) {
     const pid = escapeHtml(p.id);
-    const cols = '108px 110px 85px 85px 95px 70px 30px';
+    const cols = '102px 100px 78px 78px 110px 62px 30px';
+    const esPorMsj = p.comisionTipo === 'por_mensaje';
     let h = '<div style="margin-top:10px;background:rgba(0,212,255,0.05);border:1px solid rgba(0,212,255,0.25);border-radius:9px;padding:10px;">';
     h += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:7px;">';
     h += '<span style="color:#00d4ff;font-weight:900;font-size:11px;letter-spacing:0.5px;">📊 CIERRE DIARIO DE CAMPAÑA</span>';
@@ -4891,34 +4946,82 @@ function _renderPubCierres(p, cierres) {
     if (cierres.length === 0) {
         h += '<div style="color:#777;font-size:10.5px;padding:3px;">Sin cierres cargados.</div>';
     } else {
+        const comLabel = esPorMsj ? 'Comisión (×msj)' : 'Comisión (%)';
         h += '<div style="display:grid;grid-template-columns:' + cols + ';gap:5px;font-size:8.5px;color:#888;text-transform:uppercase;font-weight:700;margin-bottom:4px;">';
-        h += '<div>Fecha</div><div>Consumió $</div><div>Mensajes</div><div>Derivados</div><div>Costo/msj $</div><div>Conv. %</div><div></div></div>';
+        h += '<div>Fecha</div><div>Consumió</div><div>Mensajes</div><div>Derivados</div><div>' + comLabel + '</div><div>Conv. %</div><div></div></div>';
         for (const c of cierres) {
             const cid = escapeHtml(c.id);
             const mv = Number(c.mensajes) || 0, dv = Number(c.derivados) || 0;
             const conv = mv > 0 ? (dv / mv * 100) : 0;
+            const com = _pubComision(p, c);
             h += '<div style="display:grid;grid-template-columns:' + cols + ';gap:5px;margin-bottom:4px;">';
             h += '<input data-cierre-id="' + cid + '" data-field="fecha" type="date" value="' + escapeHtml(c.fecha || '') + '" style="' + _pubInp + '">';
-            h += '<input data-cierre-id="' + cid + '" data-field="consumoARS" type="number" min="0" step="100" value="' + (Number(c.consumoARS) || 0) + '" style="' + _pubInp + '">';
-            h += '<input data-cierre-id="' + cid + '" data-field="mensajes" type="number" min="0" step="1" value="' + mv + '" oninput="_pubRecalcConv(\'' + cid + '\')" style="' + _pubInp + '">';
-            h += '<input data-cierre-id="' + cid + '" data-field="derivados" type="number" min="0" step="1" value="' + dv + '" oninput="_pubRecalcConv(\'' + cid + '\')" style="' + _pubInp + '">';
-            h += '<input data-cierre-id="' + cid + '" data-field="costoMsjARS" type="number" min="0" step="1" value="' + (Number(c.costoMsjARS) || 0) + '" style="' + _pubInp + '">';
+            h += '<input data-cierre-id="' + cid + '" data-field="consumoARS" type="number" min="0" step="1" value="' + (Number(c.consumoARS) || 0) + '" oninput="_pubRecalc(\'' + pid + '\')" style="' + _pubInp + '">';
+            h += '<input data-cierre-id="' + cid + '" data-field="mensajes" type="number" min="0" step="1" value="' + mv + '" oninput="_pubRecalc(\'' + pid + '\')" style="' + _pubInp + '">';
+            h += '<input data-cierre-id="' + cid + '" data-field="derivados" type="number" min="0" step="1" value="' + dv + '" oninput="_pubRecalc(\'' + pid + '\')" style="' + _pubInp + '">';
+            h += '<div id="pubCom_' + cid + '" style="display:flex;align-items:center;justify-content:flex-end;color:#ffd700;font-weight:900;font-size:10.5px;">' + escapeHtml(_pubMon(p.moneda, com)) + '</div>';
             h += '<div id="pubConv_' + cid + '" style="display:flex;align-items:center;justify-content:center;color:#aaffaa;font-weight:900;font-size:11px;">' + conv.toFixed(1) + '%</div>';
             h += '<button type="button" onclick="pubDelCierre(\'' + pid + '\',\'' + cid + '\')" style="background:rgba(255,80,80,0.10);color:#f55;border:1px solid rgba(255,80,80,0.30);border-radius:5px;cursor:pointer;font-size:10px;">✕</button>';
             h += '</div>';
         }
+        const totCons = cierres.reduce((s, c) => s + (Number(c.consumoARS) || 0), 0);
+        const totCom = cierres.reduce((s, c) => s + _pubComision(p, c), 0);
+        h += '<div style="text-align:right;font-size:10.5px;font-weight:900;margin-top:5px;" id="pubTotCie_' + pid + '">';
+        h += '<span style="color:#aaffaa;">Consumo: ' + escapeHtml(_pubMonEq(p, totCons)) + '</span>';
+        h += '<span style="color:#ffd700;margin-left:12px;">Comisión: ' + escapeHtml(_pubMonEq(p, totCom)) + '</span>';
+        h += '<span style="color:#fff;margin-left:12px;">Total: ' + escapeHtml(_pubMonEq(p, totCons + totCom)) + '</span>';
+        h += '</div>';
     }
     h += '</div>';
     return h;
 }
 
-function _pubRecalcConv(cierreId) {
-    const m = document.querySelector('[data-cierre-id="' + cierreId + '"][data-field="mensajes"]');
-    const d = document.querySelector('[data-cierre-id="' + cierreId + '"][data-field="derivados"]');
-    const out = document.getElementById('pubConv_' + cierreId);
-    if (!m || !d || !out) return;
-    const mv = Number(m.value) || 0, dv = Number(d.value) || 0;
-    out.textContent = (mv > 0 ? (dv / mv * 100) : 0).toFixed(1) + '%';
+// Recalcula en vivo comisión, conversión y totales leyendo el DOM.
+function _pubRecalc(pid) {
+    const card = document.querySelector('[data-pub-card="' + pid + '"]');
+    if (!card) return;
+    const cfg = (f) => { const el = card.querySelector('[data-pub-field="' + f + '"]'); return el ? el.value : ''; };
+    const moneda = cfg('moneda') || 'pesos';
+    const rate = Number(cfg('usdtRate')) || 0;
+    const tipo = cfg('comisionTipo') || 'porcentaje';
+    const cv = Number(cfg('comisionValor')) || 0;
+    const monEq = (n) => {
+        n = Number(n) || 0;
+        let s = _pubMon(moneda, n);
+        if (moneda === 'usdt' && rate > 0) s += ' (≈$' + Math.round(n * rate).toLocaleString('es-AR') + ')';
+        return s;
+    };
+    let totCons = 0, totCom = 0;
+    const cids = new Set();
+    card.querySelectorAll('[data-cierre-id]').forEach(el => cids.add(el.getAttribute('data-cierre-id')));
+    for (const cid of cids) {
+        const g = (f) => { const el = card.querySelector('[data-cierre-id="' + cid + '"][data-field="' + f + '"]'); return el ? Number(el.value) || 0 : 0; };
+        const consumo = g('consumoARS'), mensajes = g('mensajes'), derivados = g('derivados');
+        const com = tipo === 'por_mensaje' ? mensajes * cv : consumo * cv / 100;
+        const conv = mensajes > 0 ? (derivados / mensajes * 100) : 0;
+        const comEl = document.getElementById('pubCom_' + cid);
+        const convEl = document.getElementById('pubConv_' + cid);
+        if (comEl) comEl.textContent = _pubMon(moneda, com);
+        if (convEl) convEl.textContent = conv.toFixed(1) + '%';
+        totCons += consumo; totCom += com;
+    }
+    const totCieEl = document.getElementById('pubTotCie_' + pid);
+    if (totCieEl) {
+        totCieEl.innerHTML = '<span style="color:#aaffaa;">Consumo: ' + escapeHtml(monEq(totCons)) + '</span>' +
+            '<span style="color:#ffd700;margin-left:12px;">Comisión: ' + escapeHtml(monEq(totCom)) + '</span>' +
+            '<span style="color:#fff;margin-left:12px;">Total: ' + escapeHtml(monEq(totCons + totCom)) + '</span>';
+    }
+    let totEnv = 0;
+    card.querySelectorAll('[data-envio-id][data-field="montoARS"]').forEach(el => { totEnv += Number(el.value) || 0; });
+    const totEnvEl = document.getElementById('pubTotEnv_' + pid);
+    if (totEnvEl) totEnvEl.textContent = 'Total enviado: ' + monEq(totEnv);
+}
+
+// Cambió un select de config: guardamos en cache y re-renderizamos para
+// que se actualicen labels y el campo de valor USDT.
+function _pubCfgChanged(id) {
+    _pubCollectAll();
+    _renderPublicistas();
 }
 
 // Lee los inputs de una tarjeta y vuelca los valores al cache.
@@ -4929,7 +5032,12 @@ function _pubCollectCard(id) {
     if (!card) return p;
     const nombreEl = card.querySelector('[data-pub-field="nombre"]');
     if (nombreEl) p.nombre = nombreEl.value;
-    if (!_pubExpanded[id]) return p; // colapsada: no hay inputs de envíos/cierres
+    if (!_pubExpanded[id]) return p; // colapsada: solo está el nombre
+    const cfg = (f) => { const el = card.querySelector('[data-pub-field="' + f + '"]'); return el ? el.value : undefined; };
+    const moneda = cfg('moneda'); if (moneda !== undefined) p.moneda = (moneda === 'usdt') ? 'usdt' : 'pesos';
+    const rate = cfg('usdtRate'); if (rate !== undefined) p.usdtRate = Number(rate) || 0;
+    const ct = cfg('comisionTipo'); if (ct !== undefined) p.comisionTipo = (ct === 'por_mensaje') ? 'por_mensaje' : 'porcentaje';
+    const cvv = cfg('comisionValor'); if (cvv !== undefined) p.comisionValor = Number(cvv) || 0;
     const envMap = {};
     card.querySelectorAll('[data-envio-id]').forEach(el => {
         const eid = el.getAttribute('data-envio-id');
@@ -4947,8 +5055,7 @@ function _pubCollectCard(id) {
     });
     p.cierres = Object.values(cieMap).map(c => ({
         id: c.id, fecha: c.fecha || '', consumoARS: Number(c.consumoARS) || 0,
-        mensajes: Number(c.mensajes) || 0, derivados: Number(c.derivados) || 0,
-        costoMsjARS: Number(c.costoMsjARS) || 0
+        mensajes: Number(c.mensajes) || 0, derivados: Number(c.derivados) || 0
     }));
     return p;
 }
@@ -4978,7 +5085,7 @@ function pubAddCierre(id) {
     const p = _publicistasCache.find(x => x.id === id);
     if (!p) return;
     p.cierres = p.cierres || [];
-    p.cierres.push({ id: 'cie_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7), fecha: _pubToday(), consumoARS: 0, mensajes: 0, derivados: 0, costoMsjARS: 0 });
+    p.cierres.push({ id: 'cie_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7), fecha: _pubToday(), consumoARS: 0, mensajes: 0, derivados: 0 });
     _pubExpanded[id] = true;
     _renderPublicistas();
 }
@@ -5002,7 +5109,7 @@ function pubDelCierre(id, cierreId) {
 async function crearPublicista() {
     const el = document.getElementById('pubNuevoNombre');
     const nombre = ((el && el.value) || '').trim();
-    if (!nombre) { showToast('Poné un nombre para el publicista', 'error'); return; }
+    if (!nombre) { showToast('Poné un nombre para la agencia', 'error'); return; }
     try {
         const r = await authFetch('/api/admin/publicistas', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -5010,7 +5117,7 @@ async function crearPublicista() {
         });
         const d = await r.json();
         if (!r.ok || !d.success) { showToast(d.error || 'Error', 'error'); return; }
-        showToast('✅ Publicista agregado', 'success');
+        showToast('✅ Agencia agregada', 'success');
         _pubCollectAll();
         if (d.item) {
             _publicistasCache.push(d.item);
@@ -5029,7 +5136,12 @@ async function guardarPublicista(id) {
     try {
         const r = await authFetch('/api/admin/publicistas/' + encodeURIComponent(id), {
             method: 'PUT', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ nombre: p.nombre, notas: p.notas || '', envios: p.envios || [], cierres: p.cierres || [] })
+            body: JSON.stringify({
+                nombre: p.nombre, notas: p.notas || '',
+                moneda: p.moneda || 'pesos', usdtRate: p.usdtRate || 0,
+                comisionTipo: p.comisionTipo || 'porcentaje', comisionValor: p.comisionValor || 0,
+                envios: p.envios || [], cierres: p.cierres || []
+            })
         });
         const d = await r.json();
         if (!r.ok || !d.success) { showToast(d.error || 'Error al guardar', 'error'); return; }
@@ -5042,7 +5154,7 @@ async function guardarPublicista(id) {
 
 async function borrarPublicista(id) {
     const p = _publicistasCache.find(x => x.id === id);
-    if (!confirm('¿Borrar el publicista "' + ((p && p.nombre) || '') + '" con todos sus envíos y cierres?')) return;
+    if (!confirm('¿Borrar la agencia "' + ((p && p.nombre) || '') + '" con todos sus envíos y cierres?')) return;
     const pin = prompt('PIN para borrar:');
     if (pin == null) return;
     if (!pin) { showToast('PIN requerido', 'error'); return; }
@@ -5050,7 +5162,7 @@ async function borrarPublicista(id) {
         const r = await authFetch('/api/admin/publicistas/' + encodeURIComponent(id) + '?pin=' + encodeURIComponent(pin), { method: 'DELETE' });
         const d = await r.json();
         if (!r.ok || !d.success) { showToast(d.error || 'Error', 'error'); return; }
-        showToast('🗑 Publicista borrado', 'success');
+        showToast('🗑 Agencia borrada', 'success');
         _pubCollectAll();
         _publicistasCache = _publicistasCache.filter(x => x.id !== id);
         delete _pubExpanded[id];
@@ -5059,4 +5171,3 @@ async function borrarPublicista(id) {
         showToast('Error de conexión', 'error');
     }
 }
-

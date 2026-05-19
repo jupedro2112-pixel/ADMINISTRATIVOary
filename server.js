@@ -2795,7 +2795,6 @@ function _normPubCierres(arr) {
     consumoARS: Math.max(0, Number((c && c.consumoARS) || 0)),
     mensajes: Math.max(0, Math.round(Number((c && c.mensajes) || 0))),
     derivados: Math.max(0, Math.round(Number((c && c.derivados) || 0))),
-    costoMsjARS: Math.max(0, Number((c && c.costoMsjARS) || 0)),
     nota: String((c && c.nota) || '').trim().slice(0, 200)
   }));
 }
@@ -2843,6 +2842,10 @@ app.put('/api/admin/publicistas/:id', authMiddleware, adminMiddleware, async (re
       set.nombre = nombre;
     }
     if (b.notas !== undefined) set.notas = String(b.notas || '').trim().slice(0, 500);
+    if (b.moneda !== undefined) set.moneda = (b.moneda === 'usdt') ? 'usdt' : 'pesos';
+    if (b.usdtRate !== undefined) set.usdtRate = Math.max(0, Number(b.usdtRate) || 0);
+    if (b.comisionTipo !== undefined) set.comisionTipo = (b.comisionTipo === 'por_mensaje') ? 'por_mensaje' : 'porcentaje';
+    if (b.comisionValor !== undefined) set.comisionValor = Math.max(0, Number(b.comisionValor) || 0);
     if (b.envios !== undefined) set.envios = _normPubEnvios(b.envios);
     if (b.cierres !== undefined) set.cierres = _normPubCierres(b.cierres);
     if (Object.keys(set).length === 0) return res.json({ success: true });
