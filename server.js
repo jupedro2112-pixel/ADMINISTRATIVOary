@@ -857,7 +857,7 @@ const _DEFAULT_SECTION_PIN = '1818';
 // Defaults específicos por sección — overridean _DEFAULT_SECTION_PIN.
 // Útil para que distintas secciones empiecen con PIN distinto sin que el
 // admin tenga que ir a cambiarlos a mano.
-const _SECTION_DEFAULT_PINS = { closings: '3333', empleados: '2020' };
+const _SECTION_DEFAULT_PINS = { closings: '3333', empleados: '2020', publicidad: '505050' };
 // PINs previos seedeados por defecto en deploys anteriores. Si el valor en
 // la DB todavía es uno de estos, se rotará al default nuevo en el próximo
 // _getSectionPins(). Si el owner ya cambió la clave a otro valor distinto,
@@ -874,7 +874,7 @@ const _defaultPinForSection = (s) => _SECTION_DEFAULT_PINS[s] || _DEFAULT_SECTIO
 // frontend-gate: los endpoints /api/admin/closings* NO requieren el token
 // de section-pin porque también los usa el rol closings_viewer que no es
 // full admin y no puede llamar a /section-pins/verify).
-const _PROTECTED_SECTIONS = ['closings', 'empleados'];
+const _PROTECTED_SECTIONS = ['closings', 'empleados', 'publicidad'];
 
 async function _getSectionPins() {
   let v = await getConfig('admin_section_pins', null);
