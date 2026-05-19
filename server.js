@@ -1235,8 +1235,8 @@ app.get('/api/admin/closings/:id', authMiddleware, closingsAccessMiddleware, asy
       row: { ...r, computed: _closingComputeTotals(r), locked: _closingIsLocked(r) }
     });
   } catch (err) {
-    logger.error(`GET /api/admin/closings/:id: ${err.message}`);
-    res.status(500).json({ error: 'Error del servidor' });
+    logger.error(`GET /api/admin/closings/:id: ${err.stack || err.message}`);
+    res.status(500).json({ error: 'Error del servidor — ' + (err.message || 'desconocido') });
   }
 });
 
@@ -1574,27 +1574,27 @@ app.delete('/api/admin/closings/:id/comprobante/:idx', authMiddleware, closingsA
     const { ClosingEntry } = _models(req);
     const id = String(req.params.id || '');
     const idx = parseInt(req.params.idx, 10);
-    const c = await ClosingEntry.findOne({ id });
+    // Traemos comprobantes + estado, SIN editHistory (puede pesar varios MB).
+    const c = await ClosingEntry.findOne({ id }, { comprobantes: 1, status: 1, confirmedAt: 1, id: 1 }).lean();
     if (!c) return res.status(404).json({ error: 'Cierre no encontrado' });
     if (_closingIsLocked(c)) {
       return res.status(403).json({ error: 'Cierre bloqueado por 24h', locked: true });
     }
-    if (!Number.isInteger(idx) || idx < 0 || idx >= c.comprobantes.length) {
+    const comps = Array.isArray(c.comprobantes) ? c.comprobantes : [];
+    if (!Number.isInteger(idx) || idx < 0 || idx >= comps.length) {
       return res.status(400).json({ error: 'Índice inválido' });
     }
-    const removed = c.comprobantes.splice(idx, 1)[0];
-    c.editHistory.push({
-      editedAt: new Date(),
-      editedBy: req.user.username || '',
-      field: 'comprobante_remove',
-      before: removed,
-      after: null
+    const removed = comps[idx];
+    const next = comps.filter((_, i) => i !== idx);
+    await ClosingEntry.updateOne({ id }, {
+      $set: { comprobantes: next },
+      // editHistory NO guarda la imagen — solo el tipo de comprobante sacado.
+      $push: { editHistory: { editedAt: new Date(), editedBy: req.user.username || '', field: 'comprobante_remove', before: { kind: removed && removed.kind, teamSlot: removed && removed.teamSlot }, after: null } }
     });
-    await c.save();
-    res.json({ success: true, row: { ...c.toObject(), computed: _closingComputeTotals(c), locked: false } });
+    res.json({ success: true });
   } catch (err) {
-    logger.error(`DELETE comprobante: ${err.message}`);
-    res.status(500).json({ error: 'Error del servidor' });
+    logger.error(`DELETE comprobante: ${err.stack || err.message}`);
+    res.status(500).json({ error: 'Error del servidor — ' + (err.message || 'desconocido') });
   }
 });
 
@@ -1616,7 +1616,10 @@ app.delete('/api/admin/closings/:id', authMiddleware, closingsAccessMiddleware, 
     if (pin !== CLOSING_DELETE_PIN) {
       return res.status(403).json({ error: 'PIN incorrecto' });
     }
-    const c = await ClosingEntry.findOne({ id });
+    const c = await ClosingEntry.findOne(
+      { id },
+      { dateKey: 1, sector: 1, status: 1, depositsARS: 1, ventasARS: 1, bajadaARS: 1, id: 1 }
+    ).lean();
     if (!c) return res.status(404).json({ error: 'Cierre no encontrado' });
     const snapshot = {
       dateKey: c.dateKey, sector: c.sector, status: c.status,
@@ -1627,8 +1630,8 @@ app.delete('/api/admin/closings/:id', authMiddleware, closingsAccessMiddleware, 
     logger.warn(`DELETE closing ${id} (PIN OK) by ${req.user.username}: ${JSON.stringify(snapshot)}`);
     res.json({ success: true });
   } catch (err) {
-    logger.error(`DELETE /api/admin/closings/:id: ${err.message}`);
-    res.status(500).json({ error: 'Error del servidor' });
+    logger.error(`DELETE /api/admin/closings/:id: ${err.stack || err.message}`);
+    res.status(500).json({ error: 'Error del servidor — ' + (err.message || 'desconocido') });
   }
 });
 
