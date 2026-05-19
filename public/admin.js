@@ -5229,8 +5229,8 @@ function _renderPubEnvios(p, envios) {
         h += '<div style="overflow-x:auto;"><div style="min-width:540px;">';
         h += '<div style="display:grid;grid-template-columns:' + cols + ';gap:6px;font-size:9px;color:#888;text-transform:uppercase;font-weight:700;margin-bottom:4px;">';
         h += '<div>Tipo</div><div>Fecha</div><div>Monto (' + (p.moneda === 'usdt' ? 'USDT' : '$') + ')</div><div>Detalle</div><div></div></div>';
-        // Ordenado por fecha desc (más nuevos arriba); empates desempatan por id desc.
-        const enviosSorted = envios.slice().sort((a, b) => (String(b.fecha || '')).localeCompare(String(a.fecha || '')) || (String(b.id || '')).localeCompare(String(a.id || '')));
+        // Ordenado por fecha asc (más viejas arriba); empates desempatan por id asc.
+        const enviosSorted = envios.slice().sort((a, b) => (String(a.fecha || '')).localeCompare(String(b.fecha || '')) || (String(a.id || '')).localeCompare(String(b.id || '')));
         for (const e of enviosSorted) {
             const eid = escapeHtml(e.id);
             const esPauta = e.tipo === 'pauta';
@@ -5305,8 +5305,8 @@ function _renderPubCierres(p, cierres) {
             h += '<div>Fecha</div><div title="plata cargada ese día (opcional)">Cargas</div><div>Consumió</div><div>Mensajes</div><div>Derivados</div><div>Comisión (%)</div><div title="(consumo + comisión) ÷ derivados">CPM final</div><div>Conv. %</div><div></div>';
         }
         h += '</div>';
-        // Ordenado por fecha desc (más nuevos arriba); empates desempatan por id desc.
-        const cierresSorted = cierres.slice().sort((a, b) => (String(b.fecha || '')).localeCompare(String(a.fecha || '')) || (String(b.id || '')).localeCompare(String(a.id || '')));
+        // Ordenado por fecha asc (más viejas arriba); empates desempatan por id asc.
+        const cierresSorted = cierres.slice().sort((a, b) => (String(a.fecha || '')).localeCompare(String(b.fecha || '')) || (String(a.id || '')).localeCompare(String(b.id || '')));
         for (const c of cierresSorted) {
             const cid = escapeHtml(c.id);
             const mv = Number(c.mensajes) || 0, dv = Number(c.derivados) || 0;
