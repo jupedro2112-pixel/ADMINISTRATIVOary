@@ -4796,6 +4796,10 @@ let _publicistasCache = [];
 let _pubPresets = ['Líneas API', 'Kommo'];
 const _pubExpanded = {};
 const _PUB_NUEVO_TIPO = '__nuevo_tipo__';
+// Estado del panel "REPORTE GENERAL" (arriba de la lista de agencias).
+let _pubReportOpen = true;
+let _pubFilterFrom = '';
+let _pubFilterTo = '';
 const _pubInp = 'background:rgba(0,0,0,0.45);border:1px solid rgba(255,255,255,0.14);color:#fff;padding:5px 7px;border-radius:5px;font-size:11.5px;box-sizing:border-box;width:100%;';
 const _pubSel = 'background:rgba(0,0,0,0.55);border:1px solid rgba(255,255,255,0.18);color:#fff;padding:5px 7px;border-radius:5px;font-size:11.5px;box-sizing:border-box;';
 
@@ -4839,6 +4843,203 @@ function _pubCpm(p, c) {
     const der = Number(c.derivados) || 0;
     if (der <= 0) return 0;
     return (_pubConsumo(p, c) + _pubComision(p, c)) / der;
+}
+
+// ===== Reporte general =====
+// Convierte un valor en la moneda de la agencia a ARS (para sumar entre agencias).
+function _pubToARS(p, valor) {
+    if (p && p.moneda === 'usdt') return (Number(valor) || 0) * (Number(p.usdtRate) || 0);
+    return Number(valor) || 0;
+}
+function _pubInRange(fecha, from, to) {
+    if (!fecha) return false;
+    if (from && fecha < from) return false;
+    if (to && fecha > to) return false;
+    return true;
+}
+// Recorre toda la cache y arma el reporte global respetando cómo factura cada agencia.
+function _pubReport(from, to) {
+    const r = {
+        totalPautaCargadaARS: 0, totalGastoExtraARS: 0,
+        totalConsumoARS: 0, totalComisionARS: 0,
+        totalMensajes: 0, totalDerivados: 0,
+        porDia: {}, porAgencia: [], usdtSinRate: []
+    };
+    for (const p of _publicistasCache) {
+        if (p.moneda === 'usdt' && !(Number(p.usdtRate) > 0)) r.usdtSinRate.push(p.nombre || p.id);
+        let agCargada = 0, agGasto = 0, agConsumo = 0, agComision = 0, agMsj = 0, agDer = 0;
+        for (const e of (p.envios || [])) {
+            if (!_pubInRange(e.fecha, from, to)) continue;
+            const ars = _pubToARS(p, e.montoARS);
+            if (e.tipo === 'pauta') agCargada += ars; else agGasto += ars;
+        }
+        for (const c of (p.cierres || [])) {
+            if (!_pubInRange(c.fecha, from, to)) continue;
+            const consumoARS = _pubToARS(p, _pubConsumo(p, c));
+            const comisionARS = _pubToARS(p, _pubComision(p, c));
+            const msj = Number(c.mensajes) || 0;
+            const der = Number(c.derivados) || 0;
+            agConsumo += consumoARS; agComision += comisionARS;
+            agMsj += msj; agDer += der;
+            const d = c.fecha || '';
+            if (!r.porDia[d]) r.porDia[d] = { consumo: 0, comision: 0, mensajes: 0, derivados: 0 };
+            r.porDia[d].consumo += consumoARS;
+            r.porDia[d].comision += comisionARS;
+            r.porDia[d].mensajes += msj;
+            r.porDia[d].derivados += der;
+        }
+        r.totalPautaCargadaARS += agCargada;
+        r.totalGastoExtraARS += agGasto;
+        r.totalConsumoARS += agConsumo;
+        r.totalComisionARS += agComision;
+        r.totalMensajes += agMsj;
+        r.totalDerivados += agDer;
+        r.porAgencia.push({
+            id: p.id, nombre: p.nombre || '—', moneda: p.moneda,
+            comisionTipo: p.comisionTipo, comisionValor: Number(p.comisionValor) || 0,
+            cargadaARS: agCargada, gastoARS: agGasto, consumoARS: agConsumo,
+            comisionARS: agComision, mensajes: agMsj, derivados: agDer
+        });
+    }
+    return r;
+}
+
+function _renderPubReport() {
+    if (_publicistasCache.length === 0) return '';
+    const r = _pubReport(_pubFilterFrom, _pubFilterTo);
+    const totalInversion = r.totalConsumoARS + r.totalComisionARS;
+    const cpmGlobal = r.totalDerivados > 0 ? totalInversion / r.totalDerivados : 0;
+    const convGlobal = r.totalMensajes > 0 ? (r.totalDerivados / r.totalMensajes * 100) : 0;
+    const saldoActual = r.totalPautaCargadaARS - r.totalConsumoARS;
+    const dias = Object.keys(r.porDia).sort();
+    // CPM promedio diario: media de los CPM de cada día con derivados.
+    let cpmPromDia = 0, n = 0;
+    for (const d of dias) {
+        const dd = r.porDia[d];
+        if (dd.derivados > 0) { cpmPromDia += (dd.consumo + dd.comision) / dd.derivados; n++; }
+    }
+    cpmPromDia = n > 0 ? cpmPromDia / n : 0;
+
+    let h = '<div style="background:rgba(255,128,0,0.08);border:1.5px solid rgba(255,128,0,0.40);border-radius:12px;padding:14px;margin-bottom:14px;">';
+    h += '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">';
+    h += '<span style="color:#ffaa66;font-weight:900;font-size:14px;letter-spacing:0.5px;">📊 REPORTE GENERAL DE PUBLICIDAD</span>';
+    h += '<div style="display:flex;gap:6px;">';
+    h += '<button type="button" onclick="_pubReportRefresh()" title="Recalcular con los cambios sin guardar" style="background:rgba(255,255,255,0.07);color:#ddd;border:1px solid rgba(255,255,255,0.18);padding:4px 10px;border-radius:6px;font-weight:700;font-size:10.5px;cursor:pointer;">🔄 Actualizar</button>';
+    h += '<button type="button" onclick="_pubReportToggle()" style="background:rgba(255,128,0,0.15);color:#ffaa66;border:1px solid rgba(255,128,0,0.40);padding:4px 12px;border-radius:6px;font-weight:800;font-size:10.5px;cursor:pointer;">' + (_pubReportOpen ? '▼ Ocultar' : '▶ Mostrar') + '</button>';
+    h += '</div></div>';
+    if (!_pubReportOpen) { h += '</div>'; return h; }
+
+    h += '<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end;margin-top:10px;margin-bottom:12px;background:rgba(0,0,0,0.30);padding:9px 11px;border-radius:8px;">';
+    h += '<div><label style="display:block;color:#aaa;font-size:9.5px;text-transform:uppercase;font-weight:700;margin-bottom:3px;">Desde</label>';
+    h += '<input id="pubReportFrom" type="date" value="' + escapeHtml(_pubFilterFrom) + '" onchange="_pubReportFilterChange()" style="' + _pubInp + 'width:150px;"></div>';
+    h += '<div><label style="display:block;color:#aaa;font-size:9.5px;text-transform:uppercase;font-weight:700;margin-bottom:3px;">Hasta</label>';
+    h += '<input id="pubReportTo" type="date" value="' + escapeHtml(_pubFilterTo) + '" onchange="_pubReportFilterChange()" style="' + _pubInp + 'width:150px;"></div>';
+    if (_pubFilterFrom || _pubFilterTo) {
+        h += '<button type="button" onclick="_pubReportClearFilter()" style="background:rgba(255,80,80,0.10);color:#f55;border:1px solid rgba(255,80,80,0.30);padding:6px 12px;border-radius:6px;font-weight:800;font-size:10.5px;cursor:pointer;height:30px;">✕ Limpiar</button>';
+    }
+    h += '<span style="color:#888;font-size:10.5px;margin-left:auto;">Todo en pesos (ARS). USDT se convierte con la cotización de cada agencia.</span>';
+    h += '</div>';
+    if (r.usdtSinRate.length > 0) {
+        h += '<div style="color:#ffaa66;font-size:10.5px;margin-bottom:8px;background:rgba(255,170,102,0.08);border:1px dashed rgba(255,170,102,0.40);padding:6px 9px;border-radius:6px;">⚠️ Sin cotización USDT cargada: ' + escapeHtml(r.usdtSinRate.join(', ')) + ' — sus importes cuentan como $0 en este reporte.</div>';
+    }
+
+    const tiles = [
+        { lbl: '💰 PAUTA CARGADA',   val: _pubFmt(r.totalPautaCargadaARS),   col: '#9fffc0' },
+        { lbl: '🔥 CONSUMIDO',       val: _pubFmt(r.totalConsumoARS),        col: '#aaffaa' },
+        { lbl: '💰 SALDO DISPONIBLE',val: _pubFmt(saldoActual),              col: saldoActual >= 0 ? '#66ff99' : '#ff7070', tip: 'pauta cargada − consumo' },
+        { lbl: '📦 GASTOS EXTRA',    val: _pubFmt(r.totalGastoExtraARS),     col: '#ffaa66', tip: 'líneas API, Kommo, etc.' },
+        { lbl: '💸 COMISIONES',      val: _pubFmt(r.totalComisionARS),       col: '#ffd700', tip: 'agencias con comisión %' },
+        { lbl: '💼 INVERSIÓN TOTAL', val: _pubFmt(totalInversion + r.totalGastoExtraARS), col: '#fff', tip: 'consumo + comisiones + gastos extra' },
+        { lbl: '✉️ MENSAJES',        val: r.totalMensajes.toLocaleString('es-AR'),  col: '#00d4ff' },
+        { lbl: '🎯 DERIVADOS',       val: r.totalDerivados.toLocaleString('es-AR'), col: '#00d4ff' },
+        { lbl: '📈 CONVERSIÓN',      val: convGlobal.toFixed(1) + '%',       col: '#aaffaa', tip: 'derivados ÷ mensajes' },
+        { lbl: '🎯 CPM FINAL',       val: _pubFmt(cpmGlobal),                col: '#ff9bd0', tip: '(consumo + comisión) ÷ derivados, sobre el total' },
+        { lbl: '📊 CPM PROM/DÍA',    val: _pubFmt(cpmPromDia),               col: '#ff9bd0', tip: 'promedio del CPM diario' }
+    ];
+    h += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-bottom:14px;">';
+    for (const t of tiles) {
+        h += '<div title="' + escapeHtml(t.tip || '') + '" style="background:rgba(0,0,0,0.35);border:1px solid rgba(255,255,255,0.10);border-radius:8px;padding:8px 10px;">';
+        h += '<div style="color:#888;font-size:9.5px;text-transform:uppercase;font-weight:700;letter-spacing:0.4px;">' + t.lbl + '</div>';
+        h += '<div style="color:' + t.col + ';font-weight:900;font-size:13.5px;margin-top:2px;">' + escapeHtml(t.val) + '</div>';
+        h += '</div>';
+    }
+    h += '</div>';
+
+    // Por agencia
+    if (r.porAgencia.length > 0) {
+        const cols = '1.4fr 110px 1fr 1fr 1fr 1fr 70px 70px 90px 70px';
+        h += '<div style="margin-top:6px;">';
+        h += '<div style="color:#ccc;font-weight:900;font-size:11px;letter-spacing:0.5px;margin-bottom:6px;">📋 POR AGENCIA</div>';
+        h += '<div style="overflow-x:auto;"><div style="min-width:820px;">';
+        h += '<div style="display:grid;grid-template-columns:' + cols + ';gap:6px;font-size:8.5px;color:#888;text-transform:uppercase;font-weight:700;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.08);">';
+        h += '<div>Agencia</div><div>Modo</div><div>Cargado</div><div>Consumo</div><div>Comisión</div><div>Gastos extra</div><div>Msj</div><div>Deriv</div><div>CPM final</div><div>Conv.%</div></div>';
+        const ags = r.porAgencia.slice().sort((a, b) => b.consumoARS - a.consumoARS);
+        for (const a of ags) {
+            const cpmAg = a.derivados > 0 ? (a.consumoARS + a.comisionARS) / a.derivados : 0;
+            const convAg = a.mensajes > 0 ? (a.derivados / a.mensajes * 100) : 0;
+            const modoTxt = a.comisionTipo === 'por_mensaje'
+                ? '×msj ' + (a.moneda === 'usdt' ? 'U$D ' : '$') + a.comisionValor
+                : a.comisionValor + '%';
+            const monedaBadge = a.moneda === 'usdt' ? ' <span style="color:#888;font-size:9px;">(USDT)</span>' : '';
+            h += '<div style="display:grid;grid-template-columns:' + cols + ';gap:6px;font-size:10.5px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,0.04);">';
+            h += '<div style="color:#fff;font-weight:800;">' + escapeHtml(a.nombre) + monedaBadge + '</div>';
+            h += '<div style="color:#aaa;">' + escapeHtml(modoTxt) + '</div>';
+            h += '<div style="color:#9fffc0;font-weight:800;">' + _pubFmt(a.cargadaARS) + '</div>';
+            h += '<div style="color:#aaffaa;font-weight:800;">' + _pubFmt(a.consumoARS) + '</div>';
+            h += '<div style="color:#ffd700;font-weight:800;">' + (a.comisionARS > 0 ? _pubFmt(a.comisionARS) : '—') + '</div>';
+            h += '<div style="color:#ffaa66;font-weight:800;">' + _pubFmt(a.gastoARS) + '</div>';
+            h += '<div style="color:#00d4ff;">' + a.mensajes.toLocaleString('es-AR') + '</div>';
+            h += '<div style="color:#00d4ff;">' + a.derivados.toLocaleString('es-AR') + '</div>';
+            h += '<div style="color:#ff9bd0;font-weight:800;">' + (a.derivados > 0 ? _pubFmt(cpmAg) : '—') + '</div>';
+            h += '<div style="color:#aaffaa;">' + convAg.toFixed(1) + '%</div>';
+            h += '</div>';
+        }
+        h += '</div></div></div>';
+    }
+
+    // Por día (más nuevos primero)
+    if (dias.length > 0) {
+        const cols = '110px 1fr 1fr 80px 80px 1fr 80px';
+        h += '<div style="margin-top:14px;">';
+        h += '<div style="color:#ccc;font-weight:900;font-size:11px;letter-spacing:0.5px;margin-bottom:6px;">📅 POR DÍA</div>';
+        h += '<div style="overflow-x:auto;max-height:340px;overflow-y:auto;"><div style="min-width:580px;">';
+        h += '<div style="display:grid;grid-template-columns:' + cols + ';gap:6px;font-size:8.5px;color:#888;text-transform:uppercase;font-weight:700;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.08);position:sticky;top:0;background:rgba(0,0,0,0.50);">';
+        h += '<div>Fecha</div><div>Consumo</div><div>Comisión</div><div>Msj</div><div>Deriv</div><div>CPM final</div><div>Conv.%</div></div>';
+        const diasDesc = dias.slice().sort((a, b) => a < b ? 1 : -1);
+        for (const d of diasDesc) {
+            const dd = r.porDia[d];
+            const cpm = dd.derivados > 0 ? (dd.consumo + dd.comision) / dd.derivados : 0;
+            const conv = dd.mensajes > 0 ? (dd.derivados / dd.mensajes * 100) : 0;
+            h += '<div style="display:grid;grid-template-columns:' + cols + ';gap:6px;font-size:10.5px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,0.04);">';
+            h += '<div style="color:#fff;font-weight:800;">' + escapeHtml(d) + '</div>';
+            h += '<div style="color:#aaffaa;font-weight:800;">' + _pubFmt(dd.consumo) + '</div>';
+            h += '<div style="color:#ffd700;font-weight:800;">' + (dd.comision > 0 ? _pubFmt(dd.comision) : '—') + '</div>';
+            h += '<div style="color:#00d4ff;">' + dd.mensajes.toLocaleString('es-AR') + '</div>';
+            h += '<div style="color:#00d4ff;">' + dd.derivados.toLocaleString('es-AR') + '</div>';
+            h += '<div style="color:#ff9bd0;font-weight:800;">' + (dd.derivados > 0 ? _pubFmt(cpm) : '—') + '</div>';
+            h += '<div style="color:#aaffaa;">' + conv.toFixed(1) + '%</div>';
+            h += '</div>';
+        }
+        h += '</div></div></div>';
+    }
+
+    h += '</div>';
+    return h;
+}
+
+function _pubReportToggle() { _pubReportOpen = !_pubReportOpen; _renderPublicistas(); }
+function _pubReportRefresh() { _pubCollectAll(); _renderPublicistas(); }
+function _pubReportFilterChange() {
+    const f = document.getElementById('pubReportFrom');
+    const t = document.getElementById('pubReportTo');
+    _pubFilterFrom = (f && f.value) || '';
+    _pubFilterTo = (t && t.value) || '';
+    _pubCollectAll();
+    _renderPublicistas();
+}
+function _pubReportClearFilter() {
+    _pubFilterFrom = ''; _pubFilterTo = '';
+    _renderPublicistas();
 }
 
 // <select> de tipo de gasto para el detalle de un envío. Opciones: los
@@ -4911,6 +5112,7 @@ function _renderPublicistas() {
     if (_publicistasCache.length === 0) {
         h += '<div style="color:#888;text-align:center;padding:24px;font-size:12.5px;">No hay agencias todavía. Agregá la primera arriba.</div>';
     } else {
+        h += _renderPubReport();
         for (const p of _publicistasCache) h += _renderPublicistaCard(p);
     }
     body.innerHTML = h;
