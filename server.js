@@ -2799,14 +2799,47 @@ function _normPubCierres(arr) {
   }));
 }
 
-// GET — lista todos los publicistas con sus envíos y cierres.
+// Tipos de gasto predefinidos para el detalle de los envíos. Se guardan
+// en Config, namespaceados por login (cada uno tiene su lista).
+const _PUB_PRESETS_DEFAULT = ['Líneas API', 'Kommo'];
+function _pubPresetsKey(req) {
+  return _tenantOf(req) === 'crazy' ? 'pub_gastos_presets__crazy' : 'pub_gastos_presets';
+}
+async function _getPubPresets(req) {
+  const v = await getConfig(_pubPresetsKey(req), null);
+  if (!Array.isArray(v) || v.length === 0) return _PUB_PRESETS_DEFAULT.slice();
+  return v.map(x => String(x || '').trim()).filter(Boolean).slice(0, 100);
+}
+
+// GET — lista todos los publicistas + los tipos de gasto predefinidos.
 app.get('/api/admin/publicistas', authMiddleware, adminMiddleware, async (req, res) => {
   try {
     const { Publicista } = _models(req);
     const items = await Publicista.find({}).sort({ nombre: 1 }).lean();
-    res.json({ success: true, items });
+    res.json({ success: true, items, presets: await _getPubPresets(req) });
   } catch (err) {
     logger.error(`GET /api/admin/publicistas: ${err.stack || err.message}`);
+    res.status(500).json({ error: 'Error del servidor — ' + (err.message || 'desconocido') });
+  }
+});
+
+// PUT — guarda la lista de tipos de gasto predefinidos.
+app.put('/api/admin/publicidad/presets', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const raw = (req.body && req.body.presets);
+    if (!Array.isArray(raw)) return res.status(400).json({ error: 'presets debe ser una lista' });
+    const seen = new Set();
+    const presets = [];
+    for (const x of raw) {
+      const s = String(x || '').trim().slice(0, 60);
+      const k = s.toLowerCase();
+      if (s && !seen.has(k)) { seen.add(k); presets.push(s); }
+      if (presets.length >= 100) break;
+    }
+    await setConfig(_pubPresetsKey(req), presets);
+    res.json({ success: true, presets });
+  } catch (err) {
+    logger.error(`PUT /api/admin/publicidad/presets: ${err.stack || err.message}`);
     res.status(500).json({ error: 'Error del servidor — ' + (err.message || 'desconocido') });
   }
 });

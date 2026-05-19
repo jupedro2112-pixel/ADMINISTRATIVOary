@@ -4784,7 +4784,9 @@ async function deleteEmpleado(id) {
 // cierres[] diarios (consumo, mensajes, derivados). La comisión y el %
 // de conversión se calculan acá según la config de la agencia.
 let _publicistasCache = [];
+let _pubPresets = ['Líneas API', 'Kommo'];
 const _pubExpanded = {};
+const _PUB_NUEVO_TIPO = '__nuevo_tipo__';
 const _pubInp = 'background:rgba(0,0,0,0.45);border:1px solid rgba(255,255,255,0.14);color:#fff;padding:5px 7px;border-radius:5px;font-size:11.5px;box-sizing:border-box;width:100%;';
 const _pubSel = 'background:rgba(0,0,0,0.55);border:1px solid rgba(255,255,255,0.18);color:#fff;padding:5px 7px;border-radius:5px;font-size:11.5px;box-sizing:border-box;';
 
@@ -4814,6 +4816,53 @@ function _pubComision(p, c) {
     if (p.comisionTipo === 'por_mensaje') return (Number(c.mensajes) || 0) * cv;
     return (Number(c.consumoARS) || 0) * cv / 100; // porcentaje sobre el consumo
 }
+// CPM final de un cierre: cuánto costó cada mensaje DERIVADO.
+// = (consumo + comisión) / derivados.
+function _pubCpm(p, c) {
+    const der = Number(c.derivados) || 0;
+    if (der <= 0) return 0;
+    return ((Number(c.consumoARS) || 0) + _pubComision(p, c)) / der;
+}
+
+// <select> de tipo de gasto para el detalle de un envío. Opciones: los
+// tipos predefinidos + el valor actual (si no estaba) + "agregar nuevo".
+function _pubDetalleSelect(eid, current) {
+    const cur = String(current || '');
+    const opts = _pubPresets.slice();
+    if (cur && !opts.some(o => o.toLowerCase() === cur.toLowerCase())) opts.unshift(cur);
+    let s = '<select data-envio-id="' + eid + '" data-field="detalle" onchange="pubDetalleChange(this)" style="' + _pubSel + 'width:100%;">';
+    if (!cur) s += '<option value="" selected>— elegir gasto —</option>';
+    for (const o of opts) {
+        s += '<option value="' + escapeHtml(o) + '"' + (o === cur ? ' selected' : '') + '>' + escapeHtml(o) + '</option>';
+    }
+    s += '<option value="' + _PUB_NUEVO_TIPO + '">➕ Agregar tipo nuevo…</option>';
+    s += '</select>';
+    return s;
+}
+
+// Al elegir "agregar tipo nuevo" en un select de detalle: pide el nombre,
+// lo suma a los tipos predefinidos (guardándolos) y lo deja seleccionado.
+async function pubDetalleChange(sel) {
+    if (sel.value !== _PUB_NUEVO_TIPO) return;
+    const eid = sel.getAttribute('data-envio-id');
+    const nombre = ((prompt('Nuevo tipo de gasto (ej: WhatsApp API, hosting…):') || '').trim()).slice(0, 60);
+    if (!nombre) { sel.value = ''; return; }
+    if (!_pubPresets.some(o => o.toLowerCase() === nombre.toLowerCase())) _pubPresets.push(nombre);
+    try {
+        const r = await authFetch('/api/admin/publicidad/presets', {
+            method: 'PUT', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ presets: _pubPresets })
+        });
+        const d = await r.json();
+        if (r.ok && d.success && Array.isArray(d.presets)) _pubPresets = d.presets;
+    } catch (_) {}
+    _pubCollectAll();
+    for (const p of _publicistasCache) {
+        const env = (p.envios || []).find(e => e.id === eid);
+        if (env) { env.detalle = nombre; break; }
+    }
+    _renderPublicistas();
+}
 
 async function loadPublicistas() {
     const body = document.getElementById('publicidadBody');
@@ -4827,6 +4876,7 @@ async function loadPublicistas() {
             return;
         }
         _publicistasCache = d.items || [];
+        if (Array.isArray(d.presets) && d.presets.length) _pubPresets = d.presets;
         _renderPublicistas();
     } catch (e) {
         body.innerHTML = '<div style="color:#ff8080;padding:14px;">Error: ' + escapeHtml(e.message || '') + '</div>';
@@ -4855,15 +4905,18 @@ function _renderPublicistaCard(p) {
     const totalEnviado = envios.reduce((s, e) => s + (Number(e.montoARS) || 0), 0);
     const totalConsumido = cierres.reduce((s, c) => s + (Number(c.consumoARS) || 0), 0);
     const totalComision = cierres.reduce((s, c) => s + _pubComision(p, c), 0);
+    const totalDerivados = cierres.reduce((s, c) => s + (Number(c.derivados) || 0), 0);
+    const cpmGen = totalDerivados > 0 ? (totalConsumido + totalComision) / totalDerivados : 0;
     const expanded = !!_pubExpanded[p.id];
     const pid = escapeHtml(p.id);
     let h = '<div data-pub-card="' + pid + '" style="background:rgba(0,0,0,0.30);border:1.5px solid rgba(255,128,0,0.35);border-radius:11px;padding:13px;margin-bottom:12px;">';
     h += '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">';
     h += '<span onclick="_pubToggle(\'' + pid + '\')" style="color:#ff8000;font-size:13px;cursor:pointer;">' + (expanded ? '▼' : '▶') + '</span>';
     h += '<input data-pub-field="nombre" type="text" value="' + escapeHtml(p.nombre || '') + '" maxlength="100" style="background:rgba(0,0,0,0.40);border:1px solid rgba(255,255,255,0.12);color:#fff;font-weight:900;font-size:13px;padding:5px 9px;border-radius:6px;flex:1;min-width:140px;">';
-    h += '<span style="color:#ffaa66;font-size:11px;font-weight:800;white-space:nowrap;">📤 ' + escapeHtml(_pubMonEq(p, totalEnviado)) + '</span>';
-    h += '<span style="color:#aaffaa;font-size:11px;font-weight:800;white-space:nowrap;">🔥 ' + escapeHtml(_pubMonEq(p, totalConsumido)) + '</span>';
-    h += '<span style="color:#ffd700;font-size:11px;font-weight:800;white-space:nowrap;">💸 ' + escapeHtml(_pubMonEq(p, totalComision)) + '</span>';
+    h += '<span title="Gastos extraordinarios (envíos)" style="color:#ffaa66;font-size:11px;font-weight:800;white-space:nowrap;">📤 ' + escapeHtml(_pubMonEq(p, totalEnviado)) + '</span>';
+    h += '<span title="Consumo de publicidad" style="color:#aaffaa;font-size:11px;font-weight:800;white-space:nowrap;">🔥 ' + escapeHtml(_pubMonEq(p, totalConsumido)) + '</span>';
+    h += '<span title="Comisión" style="color:#ffd700;font-size:11px;font-weight:800;white-space:nowrap;">💸 ' + escapeHtml(_pubMonEq(p, totalComision)) + '</span>';
+    h += '<span title="CPM final = (consumo + comisión) ÷ derivados" style="color:#ff9bd0;font-size:11px;font-weight:800;white-space:nowrap;">🎯 ' + (totalDerivados > 0 ? escapeHtml(_pubMon(p.moneda, cpmGen)) : '—') + '</span>';
     h += '<button type="button" onclick="borrarPublicista(\'' + pid + '\')" style="background:rgba(255,80,80,0.10);color:#f55;border:1px solid rgba(255,80,80,0.30);padding:4px 9px;border-radius:6px;font-weight:800;font-size:10.5px;cursor:pointer;">🗑</button>';
     h += '</div>';
     if (expanded) {
@@ -4923,7 +4976,7 @@ function _renderPubEnvios(p, envios) {
             h += '<div style="display:grid;grid-template-columns:' + cols + ';gap:6px;margin-bottom:4px;">';
             h += '<input data-envio-id="' + eid + '" data-field="fecha" type="date" value="' + escapeHtml(e.fecha || '') + '" style="' + _pubInp + '">';
             h += '<input data-envio-id="' + eid + '" data-field="montoARS" type="number" min="0" step="1" value="' + (Number(e.montoARS) || 0) + '" oninput="_pubRecalc(\'' + pid + '\')" style="' + _pubInp + '">';
-            h += '<input data-envio-id="' + eid + '" data-field="detalle" type="text" maxlength="200" value="' + escapeHtml(e.detalle || '') + '" placeholder="qué se pagó" style="' + _pubInp + '">';
+            h += _pubDetalleSelect(eid, e.detalle);
             h += '<button type="button" onclick="pubDelEnvio(\'' + pid + '\',\'' + eid + '\')" style="background:rgba(255,80,80,0.10);color:#f55;border:1px solid rgba(255,80,80,0.30);border-radius:5px;cursor:pointer;font-size:10px;">✕</button>';
             h += '</div>';
         }
@@ -4936,7 +4989,7 @@ function _renderPubEnvios(p, envios) {
 
 function _renderPubCierres(p, cierres) {
     const pid = escapeHtml(p.id);
-    const cols = '102px 100px 78px 78px 110px 62px 30px';
+    const cols = '96px 92px 70px 70px 100px 100px 56px 26px';
     const esPorMsj = p.comisionTipo === 'por_mensaje';
     let h = '<div style="margin-top:10px;background:rgba(0,212,255,0.05);border:1px solid rgba(0,212,255,0.25);border-radius:9px;padding:10px;">';
     h += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:7px;">';
@@ -4947,29 +5000,37 @@ function _renderPubCierres(p, cierres) {
         h += '<div style="color:#777;font-size:10.5px;padding:3px;">Sin cierres cargados.</div>';
     } else {
         const comLabel = esPorMsj ? 'Comisión (×msj)' : 'Comisión (%)';
+        h += '<div style="overflow-x:auto;">';
+        h += '<div style="min-width:600px;">';
         h += '<div style="display:grid;grid-template-columns:' + cols + ';gap:5px;font-size:8.5px;color:#888;text-transform:uppercase;font-weight:700;margin-bottom:4px;">';
-        h += '<div>Fecha</div><div>Consumió</div><div>Mensajes</div><div>Derivados</div><div>' + comLabel + '</div><div>Conv. %</div><div></div></div>';
+        h += '<div>Fecha</div><div>Consumió</div><div>Mensajes</div><div>Derivados</div><div>' + comLabel + '</div><div title="(consumo + comisión) ÷ derivados">CPM final</div><div>Conv. %</div><div></div></div>';
         for (const c of cierres) {
             const cid = escapeHtml(c.id);
             const mv = Number(c.mensajes) || 0, dv = Number(c.derivados) || 0;
             const conv = mv > 0 ? (dv / mv * 100) : 0;
             const com = _pubComision(p, c);
+            const cpm = _pubCpm(p, c);
             h += '<div style="display:grid;grid-template-columns:' + cols + ';gap:5px;margin-bottom:4px;">';
             h += '<input data-cierre-id="' + cid + '" data-field="fecha" type="date" value="' + escapeHtml(c.fecha || '') + '" style="' + _pubInp + '">';
             h += '<input data-cierre-id="' + cid + '" data-field="consumoARS" type="number" min="0" step="1" value="' + (Number(c.consumoARS) || 0) + '" oninput="_pubRecalc(\'' + pid + '\')" style="' + _pubInp + '">';
             h += '<input data-cierre-id="' + cid + '" data-field="mensajes" type="number" min="0" step="1" value="' + mv + '" oninput="_pubRecalc(\'' + pid + '\')" style="' + _pubInp + '">';
             h += '<input data-cierre-id="' + cid + '" data-field="derivados" type="number" min="0" step="1" value="' + dv + '" oninput="_pubRecalc(\'' + pid + '\')" style="' + _pubInp + '">';
             h += '<div id="pubCom_' + cid + '" style="display:flex;align-items:center;justify-content:flex-end;color:#ffd700;font-weight:900;font-size:10.5px;">' + escapeHtml(_pubMon(p.moneda, com)) + '</div>';
+            h += '<div id="pubCpm_' + cid + '" style="display:flex;align-items:center;justify-content:flex-end;color:#ff9bd0;font-weight:900;font-size:10.5px;">' + (dv > 0 ? escapeHtml(_pubMon(p.moneda, cpm)) : '—') + '</div>';
             h += '<div id="pubConv_' + cid + '" style="display:flex;align-items:center;justify-content:center;color:#aaffaa;font-weight:900;font-size:11px;">' + conv.toFixed(1) + '%</div>';
             h += '<button type="button" onclick="pubDelCierre(\'' + pid + '\',\'' + cid + '\')" style="background:rgba(255,80,80,0.10);color:#f55;border:1px solid rgba(255,80,80,0.30);border-radius:5px;cursor:pointer;font-size:10px;">✕</button>';
             h += '</div>';
         }
+        h += '</div></div>';
         const totCons = cierres.reduce((s, c) => s + (Number(c.consumoARS) || 0), 0);
         const totCom = cierres.reduce((s, c) => s + _pubComision(p, c), 0);
-        h += '<div style="text-align:right;font-size:10.5px;font-weight:900;margin-top:5px;" id="pubTotCie_' + pid + '">';
+        const totDer = cierres.reduce((s, c) => s + (Number(c.derivados) || 0), 0);
+        const cpmGen = totDer > 0 ? (totCons + totCom) / totDer : 0;
+        h += '<div style="text-align:right;font-size:10.5px;font-weight:900;margin-top:6px;line-height:1.7;" id="pubTotCie_' + pid + '">';
         h += '<span style="color:#aaffaa;">Consumo: ' + escapeHtml(_pubMonEq(p, totCons)) + '</span>';
         h += '<span style="color:#ffd700;margin-left:12px;">Comisión: ' + escapeHtml(_pubMonEq(p, totCom)) + '</span>';
         h += '<span style="color:#fff;margin-left:12px;">Total: ' + escapeHtml(_pubMonEq(p, totCons + totCom)) + '</span>';
+        h += '<span style="color:#ff9bd0;margin-left:12px;">CPM final: ' + (totDer > 0 ? escapeHtml(_pubMon(p.moneda, cpmGen)) : '—') + '</span>';
         h += '</div>';
     }
     h += '</div>';
@@ -4991,7 +5052,7 @@ function _pubRecalc(pid) {
         if (moneda === 'usdt' && rate > 0) s += ' (≈$' + Math.round(n * rate).toLocaleString('es-AR') + ')';
         return s;
     };
-    let totCons = 0, totCom = 0;
+    let totCons = 0, totCom = 0, totDer = 0;
     const cids = new Set();
     card.querySelectorAll('[data-cierre-id]').forEach(el => cids.add(el.getAttribute('data-cierre-id')));
     for (const cid of cids) {
@@ -4999,17 +5060,22 @@ function _pubRecalc(pid) {
         const consumo = g('consumoARS'), mensajes = g('mensajes'), derivados = g('derivados');
         const com = tipo === 'por_mensaje' ? mensajes * cv : consumo * cv / 100;
         const conv = mensajes > 0 ? (derivados / mensajes * 100) : 0;
+        const cpm = derivados > 0 ? (consumo + com) / derivados : 0;
         const comEl = document.getElementById('pubCom_' + cid);
         const convEl = document.getElementById('pubConv_' + cid);
+        const cpmEl = document.getElementById('pubCpm_' + cid);
         if (comEl) comEl.textContent = _pubMon(moneda, com);
         if (convEl) convEl.textContent = conv.toFixed(1) + '%';
-        totCons += consumo; totCom += com;
+        if (cpmEl) cpmEl.textContent = derivados > 0 ? _pubMon(moneda, cpm) : '—';
+        totCons += consumo; totCom += com; totDer += derivados;
     }
     const totCieEl = document.getElementById('pubTotCie_' + pid);
     if (totCieEl) {
+        const cpmGen = totDer > 0 ? (totCons + totCom) / totDer : 0;
         totCieEl.innerHTML = '<span style="color:#aaffaa;">Consumo: ' + escapeHtml(monEq(totCons)) + '</span>' +
             '<span style="color:#ffd700;margin-left:12px;">Comisión: ' + escapeHtml(monEq(totCom)) + '</span>' +
-            '<span style="color:#fff;margin-left:12px;">Total: ' + escapeHtml(monEq(totCons + totCom)) + '</span>';
+            '<span style="color:#fff;margin-left:12px;">Total: ' + escapeHtml(monEq(totCons + totCom)) + '</span>' +
+            '<span style="color:#ff9bd0;margin-left:12px;">CPM final: ' + (totDer > 0 ? escapeHtml(_pubMon(moneda, cpmGen)) : '—') + '</span>';
     }
     let totEnv = 0;
     card.querySelectorAll('[data-envio-id][data-field="montoARS"]').forEach(el => { totEnv += Number(el.value) || 0; });
