@@ -106,6 +106,10 @@
                     <span>👥</span>
                     <span><strong>EMPLEADOS</strong></span>
                 </a>
+                <a href="#" class="nav-item" data-section="publicidad" style="background:rgba(255,128,0,0.10);border-left:3px solid #ff8000;">
+                    <span>📣</span>
+                    <span><strong>PUBLICIDAD</strong></span>
+                </a>
             </nav>
             <div class="sidebar-footer">
                 <span id="adminName">Admin</span>
@@ -251,6 +255,27 @@
                     </p>
                 </div>
                 <div id="empleadosBody">
+                    <div style="color:#aaa;text-align:center;padding:24px;">⏳ Cargando…</div>
+                </div>
+            </section>
+
+            <!-- ============================================
+                 SECCIÓN: PUBLICIDAD
+                 Publicistas con sus envíos de plata + cierres diarios.
+                 ============================================ -->
+            <section id="publicidadSection" class="section">
+                <div class="panel-header">
+                    <h2>📣 Publicidad</h2>
+                    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                        <button class="refresh-btn" onclick="loadPublicistas()" title="Actualizar">🔄</button>
+                    </div>
+                </div>
+                <div style="background:rgba(255,128,0,0.06);border-left:3px solid #ff8000;padding:10px 12px;margin-bottom:14px;border-radius:6px;">
+                    <p style="margin:0;color:#bbb;font-size:11.5px;line-height:1.55;">
+                        Control de gastos de publicidad. Agregá un publicista y adentro cargás los <strong>envíos</strong> de plata del día a día (con su detalle: líneas API, u otros gastos) y el <strong>cierre diario</strong> de la campaña (consumo, mensajes que llegaron, derivados, costo por mensaje). El % de conversión se calcula solo.
+                    </p>
+                </div>
+                <div id="publicidadBody">
                     <div style="color:#aaa;text-align:center;padding:24px;">⏳ Cargando…</div>
                 </div>
             </section>

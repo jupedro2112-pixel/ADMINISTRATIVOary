@@ -2304,6 +2304,7 @@ app.get('/api/admin/active-users-count', authMiddleware, adminMiddleware, (req, 
 const EmployeeEntry = require('./src/models/EmployeeEntry');
 const EmployeeSectorConfig = require('./src/models/EmployeeSectorConfig');
 const EmployeeClosing = require('./src/models/EmployeeClosing');
+const Publicista = require('./src/models/Publicista');
 const EMP_DELETE_PIN = '1818';
 const EMP_SECTORS = ['ganamos', 'publicidad', 'buffalo'];
 const EMP_DIAS_MES = 30;
@@ -2325,15 +2326,17 @@ const CotizacionExternaEntryCrazy = _crazyModel(CotizacionExternaEntry, 'Cotizac
 const EmployeeEntryCrazy          = _crazyModel(EmployeeEntry, 'EmployeeEntryCrazy', 'employeeentries_crazy');
 const EmployeeSectorConfigCrazy   = _crazyModel(EmployeeSectorConfig, 'EmployeeSectorConfigCrazy', 'employeesectorconfigs_crazy');
 const EmployeeClosingCrazy        = _crazyModel(EmployeeClosing, 'EmployeeClosingCrazy', 'employeeclosings_crazy');
+const PublicistaCrazy             = _crazyModel(Publicista, 'PublicistaCrazy', 'publicistas_crazy');
 
-const _MODELS_MAIN = { ClosingEntry, CotizacionEntry, CotizacionExternaEntry, EmployeeEntry, EmployeeSectorConfig, EmployeeClosing };
+const _MODELS_MAIN = { ClosingEntry, CotizacionEntry, CotizacionExternaEntry, EmployeeEntry, EmployeeSectorConfig, EmployeeClosing, Publicista };
 const _MODELS_CRAZY = {
   ClosingEntry: ClosingEntryCrazy,
   CotizacionEntry: CotizacionEntryCrazy,
   CotizacionExternaEntry: CotizacionExternaEntryCrazy,
   EmployeeEntry: EmployeeEntryCrazy,
   EmployeeSectorConfig: EmployeeSectorConfigCrazy,
-  EmployeeClosing: EmployeeClosingCrazy
+  EmployeeClosing: EmployeeClosingCrazy,
+  Publicista: PublicistaCrazy
 };
 
 // Tenant del request: 'crazy' para el login crazy, 'main' para el resto.
@@ -2763,6 +2766,108 @@ app.delete('/api/admin/empleados/:id', authMiddleware, closingsAccessMiddleware,
   } catch (err) {
     logger.error(`DELETE /api/admin/empleados/:id: ${err.message}`);
     res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// ============================================
+// PUBLICIDAD — publicistas, envíos de plata y cierres diarios
+// ============================================
+// Cada publicista lleva: envios[] (la plata que le mandamos día a día,
+// con detalle del gasto) y cierres[] diarios de campaña (consumo,
+// mensajes que llegaron, derivados, costo/msj). El % de conversión se
+// calcula en el front (derivados / mensajes × 100), no se guarda.
+
+function _normPubEnvios(arr) {
+  if (!Array.isArray(arr)) return [];
+  return arr.slice(0, 2000).map(e => ({
+    id: String((e && e.id) || `env_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`).slice(0, 60),
+    fecha: (String((e && e.fecha) || '').match(/^\d{4}-\d{2}-\d{2}$/) ? e.fecha : ''),
+    montoARS: Math.max(0, Number((e && e.montoARS) || 0)),
+    detalle: String((e && e.detalle) || '').trim().slice(0, 200)
+  }));
+}
+
+function _normPubCierres(arr) {
+  if (!Array.isArray(arr)) return [];
+  return arr.slice(0, 2000).map(c => ({
+    id: String((c && c.id) || `cie_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`).slice(0, 60),
+    fecha: (String((c && c.fecha) || '').match(/^\d{4}-\d{2}-\d{2}$/) ? c.fecha : ''),
+    consumoARS: Math.max(0, Number((c && c.consumoARS) || 0)),
+    mensajes: Math.max(0, Math.round(Number((c && c.mensajes) || 0))),
+    derivados: Math.max(0, Math.round(Number((c && c.derivados) || 0))),
+    costoMsjARS: Math.max(0, Number((c && c.costoMsjARS) || 0)),
+    nota: String((c && c.nota) || '').trim().slice(0, 200)
+  }));
+}
+
+// GET — lista todos los publicistas con sus envíos y cierres.
+app.get('/api/admin/publicistas', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const { Publicista } = _models(req);
+    const items = await Publicista.find({}).sort({ nombre: 1 }).lean();
+    res.json({ success: true, items });
+  } catch (err) {
+    logger.error(`GET /api/admin/publicistas: ${err.stack || err.message}`);
+    res.status(500).json({ error: 'Error del servidor — ' + (err.message || 'desconocido') });
+  }
+});
+
+// POST — crear un publicista nuevo.
+app.post('/api/admin/publicistas', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const { Publicista } = _models(req);
+    const nombre = String((req.body && req.body.nombre) || '').trim().slice(0, 100);
+    if (!nombre) return res.status(400).json({ error: 'Poné un nombre para el publicista' });
+    const doc = await Publicista.create({
+      id: uuidv4(),
+      nombre,
+      createdBy: (req.user && req.user.username) || ''
+    });
+    res.json({ success: true, item: doc.toObject() });
+  } catch (err) {
+    logger.error(`POST /api/admin/publicistas: ${err.stack || err.message}`);
+    res.status(500).json({ error: 'Error del servidor — ' + (err.message || 'desconocido') });
+  }
+});
+
+// PUT — actualiza nombre/notas y reemplaza los envíos y cierres del publicista.
+app.put('/api/admin/publicistas/:id', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const { Publicista } = _models(req);
+    const id = String(req.params.id || '');
+    const b = req.body || {};
+    const set = {};
+    if (b.nombre !== undefined) {
+      const nombre = String(b.nombre || '').trim().slice(0, 100);
+      if (!nombre) return res.status(400).json({ error: 'El nombre no puede quedar vacío' });
+      set.nombre = nombre;
+    }
+    if (b.notas !== undefined) set.notas = String(b.notas || '').trim().slice(0, 500);
+    if (b.envios !== undefined) set.envios = _normPubEnvios(b.envios);
+    if (b.cierres !== undefined) set.cierres = _normPubCierres(b.cierres);
+    if (Object.keys(set).length === 0) return res.json({ success: true });
+    const r = await Publicista.updateOne({ id }, { $set: set });
+    if (!r.matchedCount) return res.status(404).json({ error: 'Publicista no encontrado' });
+    res.json({ success: true });
+  } catch (err) {
+    logger.error(`PUT /api/admin/publicistas/:id: ${err.stack || err.message}`);
+    res.status(500).json({ error: 'Error del servidor — ' + (err.message || 'desconocido') });
+  }
+});
+
+// DELETE — borrar un publicista (requiere PIN 1818).
+app.delete('/api/admin/publicistas/:id', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const { Publicista } = _models(req);
+    const id = String(req.params.id || '');
+    const pin = String((req.query && req.query.pin) || (req.body && req.body.pin) || '');
+    if (pin !== '1818') return res.status(403).json({ error: 'PIN incorrecto' });
+    const r = await Publicista.deleteOne({ id });
+    if (!r.deletedCount) return res.status(404).json({ error: 'Publicista no encontrado' });
+    res.json({ success: true });
+  } catch (err) {
+    logger.error(`DELETE /api/admin/publicistas/:id: ${err.stack || err.message}`);
+    res.status(500).json({ error: 'Error del servidor — ' + (err.message || 'desconocido') });
   }
 });
 
