@@ -2793,6 +2793,7 @@ function _normPubCierres(arr) {
   return arr.slice(0, 2000).map(c => ({
     id: String((c && c.id) || `cie_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`).slice(0, 60),
     fecha: (String((c && c.fecha) || '').match(/^\d{4}-\d{2}-\d{2}$/) ? c.fecha : ''),
+    cargasARS: Math.max(0, Number((c && c.cargasARS) || 0)),
     consumoARS: Math.max(0, Number((c && c.consumoARS) || 0)),
     mensajes: Math.max(0, Math.round(Number((c && c.mensajes) || 0))),
     derivados: Math.max(0, Math.round(Number((c && c.derivados) || 0))),

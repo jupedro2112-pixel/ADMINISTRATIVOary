@@ -35,6 +35,7 @@ const envioSchema = new mongoose.Schema({
 const cierreDiaSchema = new mongoose.Schema({
   id: { type: String, required: true },
   fecha: { type: String, default: '' },              // YYYY-MM-DD
+  cargasARS: { type: Number, default: 0, min: 0 },    // (opcional) plata cargada ese día. Suma al saldo igual que los envíos tipo 'pauta'.
   consumoARS: { type: Number, default: 0, min: 0 },   // cuánto consumió (en la moneda de la agencia)
   mensajes: { type: Number, default: 0, min: 0 },     // mensajes que llegaron
   derivados: { type: Number, default: 0, min: 0 },    // cuántos fueron derivados

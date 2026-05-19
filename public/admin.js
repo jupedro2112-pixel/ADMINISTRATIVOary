@@ -4800,6 +4800,7 @@ const _PUB_NUEVO_TIPO = '__nuevo_tipo__';
 let _pubReportOpen = true;
 let _pubFilterFrom = '';
 let _pubFilterTo = '';
+let _pubFilterAgency = ''; // '' = todas; o el id de una agencia para ver solo esa.
 const _pubInp = 'background:rgba(0,0,0,0.45);border:1px solid rgba(255,255,255,0.14);color:#fff;padding:5px 7px;border-radius:5px;font-size:11.5px;box-sizing:border-box;width:100%;';
 const _pubSel = 'background:rgba(0,0,0,0.55);border:1px solid rgba(255,255,255,0.18);color:#fff;padding:5px 7px;border-radius:5px;font-size:11.5px;box-sizing:border-box;';
 
@@ -4858,14 +4859,17 @@ function _pubInRange(fecha, from, to) {
     return true;
 }
 // Recorre toda la cache y arma el reporte global respetando cómo factura cada agencia.
-function _pubReport(from, to) {
+// agencyId: '' = todas; cualquier otro valor filtra a esa agencia.
+function _pubReport(from, to, agencyId) {
     const r = {
         totalPautaCargadaARS: 0, totalGastoExtraARS: 0,
         totalConsumoARS: 0, totalComisionARS: 0,
         totalMensajes: 0, totalDerivados: 0,
         porDia: {}, porAgencia: [], usdtSinRate: []
     };
+    const ag = agencyId || '';
     for (const p of _publicistasCache) {
+        if (ag && p.id !== ag) continue;
         if (p.moneda === 'usdt' && !(Number(p.usdtRate) > 0)) r.usdtSinRate.push(p.nombre || p.id);
         let agCargada = 0, agGasto = 0, agConsumo = 0, agComision = 0, agMsj = 0, agDer = 0;
         for (const e of (p.envios || [])) {
@@ -4877,12 +4881,15 @@ function _pubReport(from, to) {
             if (!_pubInRange(c.fecha, from, to)) continue;
             const consumoARS = _pubToARS(p, _pubConsumo(p, c));
             const comisionARS = _pubToARS(p, _pubComision(p, c));
+            const cargasARS = _pubToARS(p, Number(c.cargasARS) || 0);
             const msj = Number(c.mensajes) || 0;
             const der = Number(c.derivados) || 0;
+            agCargada += cargasARS; // las cargas del día tambien suman a pauta cargada
             agConsumo += consumoARS; agComision += comisionARS;
             agMsj += msj; agDer += der;
             const d = c.fecha || '';
-            if (!r.porDia[d]) r.porDia[d] = { consumo: 0, comision: 0, mensajes: 0, derivados: 0 };
+            if (!r.porDia[d]) r.porDia[d] = { cargas: 0, consumo: 0, comision: 0, mensajes: 0, derivados: 0 };
+            r.porDia[d].cargas += cargasARS;
             r.porDia[d].consumo += consumoARS;
             r.porDia[d].comision += comisionARS;
             r.porDia[d].mensajes += msj;
@@ -4906,7 +4913,9 @@ function _pubReport(from, to) {
 
 function _renderPubReport() {
     if (_publicistasCache.length === 0) return '';
-    const r = _pubReport(_pubFilterFrom, _pubFilterTo);
+    const r = _pubReport(_pubFilterFrom, _pubFilterTo, _pubFilterAgency);
+    const agenciaSel = _pubFilterAgency ? _publicistasCache.find(p => p.id === _pubFilterAgency) : null;
+    const agenciaSelNombre = agenciaSel ? (agenciaSel.nombre || '—') : '';
     const totalInversion = r.totalConsumoARS + r.totalComisionARS;
     const cpmGlobal = r.totalDerivados > 0 ? totalInversion / r.totalDerivados : 0;
     const convGlobal = r.totalMensajes > 0 ? (r.totalDerivados / r.totalMensajes * 100) : 0;
@@ -4930,15 +4939,28 @@ function _renderPubReport() {
     if (!_pubReportOpen) { h += '</div>'; return h; }
 
     h += '<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end;margin-top:10px;margin-bottom:12px;background:rgba(0,0,0,0.30);padding:9px 11px;border-radius:8px;">';
+    h += '<div><label style="display:block;color:#aaa;font-size:9.5px;text-transform:uppercase;font-weight:700;margin-bottom:3px;">Agencia</label>';
+    h += '<select id="pubReportAgency" onchange="_pubReportFilterChange()" style="' + _pubSel + 'width:200px;">';
+    h += '<option value=""' + (!_pubFilterAgency ? ' selected' : '') + '>— Todas —</option>';
+    for (const p of _publicistasCache) {
+        h += '<option value="' + escapeHtml(p.id) + '"' + (_pubFilterAgency === p.id ? ' selected' : '') + '>' + escapeHtml(p.nombre || p.id) + (p.moneda === 'usdt' ? ' (USDT)' : '') + '</option>';
+    }
+    h += '</select></div>';
     h += '<div><label style="display:block;color:#aaa;font-size:9.5px;text-transform:uppercase;font-weight:700;margin-bottom:3px;">Desde</label>';
     h += '<input id="pubReportFrom" type="date" value="' + escapeHtml(_pubFilterFrom) + '" onchange="_pubReportFilterChange()" style="' + _pubInp + 'width:150px;"></div>';
     h += '<div><label style="display:block;color:#aaa;font-size:9.5px;text-transform:uppercase;font-weight:700;margin-bottom:3px;">Hasta</label>';
     h += '<input id="pubReportTo" type="date" value="' + escapeHtml(_pubFilterTo) + '" onchange="_pubReportFilterChange()" style="' + _pubInp + 'width:150px;"></div>';
-    if (_pubFilterFrom || _pubFilterTo) {
+    if (_pubFilterFrom || _pubFilterTo || _pubFilterAgency) {
         h += '<button type="button" onclick="_pubReportClearFilter()" style="background:rgba(255,80,80,0.10);color:#f55;border:1px solid rgba(255,80,80,0.30);padding:6px 12px;border-radius:6px;font-weight:800;font-size:10.5px;cursor:pointer;height:30px;">✕ Limpiar</button>';
     }
     h += '<span style="color:#888;font-size:10.5px;margin-left:auto;">Todo en pesos (ARS). USDT se convierte con la cotización de cada agencia.</span>';
     h += '</div>';
+    if (agenciaSel) {
+        const modoTxt = agenciaSel.comisionTipo === 'por_mensaje'
+            ? '×msj ' + (agenciaSel.moneda === 'usdt' ? 'U$D ' : '$') + (Number(agenciaSel.comisionValor) || 0)
+            : (Number(agenciaSel.comisionValor) || 0) + '% sobre consumo';
+        h += '<div style="color:#ffaa66;font-size:11px;margin-bottom:8px;background:rgba(255,128,0,0.08);border:1px dashed rgba(255,128,0,0.40);padding:7px 10px;border-radius:6px;">📍 Analizando solo <b>' + escapeHtml(agenciaSelNombre) + '</b> · cobra ' + escapeHtml(modoTxt) + (agenciaSel.moneda === 'usdt' ? ' · USDT a $' + (Number(agenciaSel.usdtRate) || 0) : '') + '</div>';
+    }
     if (r.usdtSinRate.length > 0) {
         h += '<div style="color:#ffaa66;font-size:10.5px;margin-bottom:8px;background:rgba(255,170,102,0.08);border:1px dashed rgba(255,170,102,0.40);padding:6px 9px;border-radius:6px;">⚠️ Sin cotización USDT cargada: ' + escapeHtml(r.usdtSinRate.join(', ')) + ' — sus importes cuentan como $0 en este reporte.</div>';
     }
@@ -4999,12 +5021,12 @@ function _renderPubReport() {
 
     // Por día (más nuevos primero)
     if (dias.length > 0) {
-        const cols = '110px 1fr 1fr 80px 80px 1fr 80px';
+        const cols = '110px 1fr 1fr 1fr 80px 80px 1fr 80px';
         h += '<div style="margin-top:14px;">';
         h += '<div style="color:#ccc;font-weight:900;font-size:11px;letter-spacing:0.5px;margin-bottom:6px;">📅 POR DÍA</div>';
-        h += '<div style="overflow-x:auto;max-height:340px;overflow-y:auto;"><div style="min-width:580px;">';
+        h += '<div style="overflow-x:auto;max-height:340px;overflow-y:auto;"><div style="min-width:660px;">';
         h += '<div style="display:grid;grid-template-columns:' + cols + ';gap:6px;font-size:8.5px;color:#888;text-transform:uppercase;font-weight:700;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.08);position:sticky;top:0;background:rgba(0,0,0,0.50);">';
-        h += '<div>Fecha</div><div>Consumo</div><div>Comisión</div><div>Msj</div><div>Deriv</div><div>CPM final</div><div>Conv.%</div></div>';
+        h += '<div>Fecha</div><div>Cargas</div><div>Consumo</div><div>Comisión</div><div>Msj</div><div>Deriv</div><div>CPM final</div><div>Conv.%</div></div>';
         const diasDesc = dias.slice().sort((a, b) => a < b ? 1 : -1);
         for (const d of diasDesc) {
             const dd = r.porDia[d];
@@ -5012,6 +5034,7 @@ function _renderPubReport() {
             const conv = dd.mensajes > 0 ? (dd.derivados / dd.mensajes * 100) : 0;
             h += '<div style="display:grid;grid-template-columns:' + cols + ';gap:6px;font-size:10.5px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,0.04);">';
             h += '<div style="color:#fff;font-weight:800;">' + escapeHtml(d) + '</div>';
+            h += '<div style="color:#9fffc0;font-weight:800;">' + (dd.cargas > 0 ? _pubFmt(dd.cargas) : '—') + '</div>';
             h += '<div style="color:#aaffaa;font-weight:800;">' + _pubFmt(dd.consumo) + '</div>';
             h += '<div style="color:#ffd700;font-weight:800;">' + (dd.comision > 0 ? _pubFmt(dd.comision) : '—') + '</div>';
             h += '<div style="color:#00d4ff;">' + dd.mensajes.toLocaleString('es-AR') + '</div>';
@@ -5032,13 +5055,15 @@ function _pubReportRefresh() { _pubCollectAll(); _renderPublicistas(); }
 function _pubReportFilterChange() {
     const f = document.getElementById('pubReportFrom');
     const t = document.getElementById('pubReportTo');
+    const a = document.getElementById('pubReportAgency');
     _pubFilterFrom = (f && f.value) || '';
     _pubFilterTo = (t && t.value) || '';
+    _pubFilterAgency = (a && a.value) || '';
     _pubCollectAll();
     _renderPublicistas();
 }
 function _pubReportClearFilter() {
-    _pubFilterFrom = ''; _pubFilterTo = '';
+    _pubFilterFrom = ''; _pubFilterTo = ''; _pubFilterAgency = '';
     _renderPublicistas();
 }
 
@@ -5122,7 +5147,9 @@ function _renderPublicistaCard(p) {
     const envios = Array.isArray(p.envios) ? p.envios : [];
     const cierres = Array.isArray(p.cierres) ? p.cierres : [];
     const esPorMsj = p.comisionTipo === 'por_mensaje';
-    const totalPauta = envios.filter(e => e.tipo === 'pauta').reduce((s, e) => s + (Number(e.montoARS) || 0), 0);
+    const totalPautaEnvios = envios.filter(e => e.tipo === 'pauta').reduce((s, e) => s + (Number(e.montoARS) || 0), 0);
+    const totalCargasCie = cierres.reduce((s, c) => s + (Number(c.cargasARS) || 0), 0);
+    const totalPauta = totalPautaEnvios + totalCargasCie;
     const totalGasto = envios.filter(e => e.tipo !== 'pauta').reduce((s, e) => s + (Number(e.montoARS) || 0), 0);
     const totalConsumido = cierres.reduce((s, c) => s + _pubConsumo(p, c), 0);
     const totalComision = cierres.reduce((s, c) => s + _pubComision(p, c), 0);
@@ -5229,7 +5256,9 @@ function _renderPubEnvios(p, envios) {
 // Caja de saldo de pauta: cargas adelantadas − consumo = disponible.
 function _renderPubSaldo(p) {
     const pid = escapeHtml(p.id);
-    const cargas = (Array.isArray(p.envios) ? p.envios : []).filter(e => e.tipo === 'pauta').reduce((s, e) => s + (Number(e.montoARS) || 0), 0);
+    const cargasEnvios = (Array.isArray(p.envios) ? p.envios : []).filter(e => e.tipo === 'pauta').reduce((s, e) => s + (Number(e.montoARS) || 0), 0);
+    const cargasCierres = (Array.isArray(p.cierres) ? p.cierres : []).reduce((s, c) => s + (Number(c.cargasARS) || 0), 0);
+    const cargas = cargasEnvios + cargasCierres;
     const consumo = (Array.isArray(p.cierres) ? p.cierres : []).reduce((s, c) => s + _pubConsumo(p, c), 0);
     const saldo = cargas - consumo;
     const col = saldo >= 0 ? '#66ff99' : '#ff7070';
@@ -5251,8 +5280,8 @@ function _renderPubCierres(p, cierres) {
     //  - por_mensaje: consumo es AUTO (mensajes × costo/msj), no se edita.
     //  - porcentaje:  consumo a mano + columna de comisión calculada.
     const cols = esPorMsj
-        ? '96px 80px 80px 110px 100px 60px 26px'
-        : '96px 92px 70px 70px 100px 100px 56px 26px';
+        ? '96px 88px 80px 80px 110px 100px 60px 26px'
+        : '96px 88px 92px 70px 70px 100px 100px 56px 26px';
     let h = '<div style="margin-top:10px;background:rgba(0,212,255,0.05);border:1px solid rgba(0,212,255,0.25);border-radius:9px;padding:10px;">';
     h += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:7px;">';
     h += '<span style="color:#00d4ff;font-weight:900;font-size:11px;letter-spacing:0.5px;">📊 CIERRE DIARIO DE CAMPAÑA</span>';
@@ -5262,12 +5291,12 @@ function _renderPubCierres(p, cierres) {
         h += '<div style="color:#777;font-size:10.5px;padding:3px;">Sin cierres cargados.</div>';
     } else {
         h += '<div style="overflow-x:auto;">';
-        h += '<div style="min-width:' + (esPorMsj ? '540px' : '600px') + ';">';
+        h += '<div style="min-width:' + (esPorMsj ? '630px' : '690px') + ';">';
         h += '<div style="display:grid;grid-template-columns:' + cols + ';gap:5px;font-size:8.5px;color:#888;text-transform:uppercase;font-weight:700;margin-bottom:4px;">';
         if (esPorMsj) {
-            h += '<div>Fecha</div><div>Mensajes</div><div>Derivados</div><div title="mensajes × costo/msj">Consumió (auto)</div><div title="consumo ÷ derivados">CPM final</div><div>Conv. %</div><div></div>';
+            h += '<div>Fecha</div><div title="plata cargada ese día (opcional)">Cargas</div><div>Mensajes</div><div>Derivados</div><div title="mensajes × costo/msj">Consumió (auto)</div><div title="consumo ÷ derivados">CPM final</div><div>Conv. %</div><div></div>';
         } else {
-            h += '<div>Fecha</div><div>Consumió</div><div>Mensajes</div><div>Derivados</div><div>Comisión (%)</div><div title="(consumo + comisión) ÷ derivados">CPM final</div><div>Conv. %</div><div></div>';
+            h += '<div>Fecha</div><div title="plata cargada ese día (opcional)">Cargas</div><div>Consumió</div><div>Mensajes</div><div>Derivados</div><div>Comisión (%)</div><div title="(consumo + comisión) ÷ derivados">CPM final</div><div>Conv. %</div><div></div>';
         }
         h += '</div>';
         for (const c of cierres) {
@@ -5279,6 +5308,7 @@ function _renderPubCierres(p, cierres) {
             const cpm = _pubCpm(p, c);
             h += '<div style="display:grid;grid-template-columns:' + cols + ';gap:5px;margin-bottom:4px;">';
             h += '<input data-cierre-id="' + cid + '" data-field="fecha" type="date" value="' + escapeHtml(c.fecha || '') + '" style="' + _pubInp + '">';
+            h += '<input data-cierre-id="' + cid + '" data-field="cargasARS" type="number" min="0" step="1" value="' + (Number(c.cargasARS) || 0) + '" oninput="_pubRecalc(\'' + pid + '\')" title="plata cargada ese día (opcional)" placeholder="0" style="' + _pubInp + '">';
             if (esPorMsj) {
                 h += '<input data-cierre-id="' + cid + '" data-field="mensajes" type="number" min="0" step="1" value="' + mv + '" oninput="_pubRecalc(\'' + pid + '\')" style="' + _pubInp + '">';
                 h += '<input data-cierre-id="' + cid + '" data-field="derivados" type="number" min="0" step="1" value="' + dv + '" oninput="_pubRecalc(\'' + pid + '\')" style="' + _pubInp + '">';
@@ -5328,7 +5358,7 @@ function _pubRecalc(pid) {
         return s;
     };
     const esPorMsj = tipo === 'por_mensaje';
-    let totCons = 0, totCom = 0, totDer = 0;
+    let totCons = 0, totCom = 0, totDer = 0, totCargasCie = 0;
     const cids = new Set();
     card.querySelectorAll('[data-cierre-id]').forEach(el => cids.add(el.getAttribute('data-cierre-id')));
     for (const cid of cids) {
@@ -5347,6 +5377,7 @@ function _pubRecalc(pid) {
         if (convEl) convEl.textContent = conv.toFixed(1) + '%';
         if (cpmEl) cpmEl.textContent = derivados > 0 ? _pubMon(moneda, cpm) : '—';
         totCons += consumo; totCom += com; totDer += derivados;
+        totCargasCie += g('cargasARS');
     }
     const totCieEl = document.getElementById('pubTotCie_' + pid);
     if (totCieEl) {
@@ -5375,9 +5406,10 @@ function _pubRecalc(pid) {
     }
     const saldoEl = document.getElementById('pubSaldo_' + pid);
     if (saldoEl) {
-        const saldo = totPauta - totCons;
+        const cargado = totPauta + totCargasCie;
+        const saldo = cargado - totCons;
         const col = saldo >= 0 ? '#66ff99' : '#ff7070';
-        saldoEl.innerHTML = '<span style="color:#aaa;">Cargado: ' + escapeHtml(monEq(totPauta)) + '</span>' +
+        saldoEl.innerHTML = '<span style="color:#aaa;">Cargado: ' + escapeHtml(monEq(cargado)) + '</span>' +
             '<span style="color:#aaa;margin-left:12px;">Consumido: ' + escapeHtml(monEq(totCons)) + '</span>' +
             '<span style="color:' + col + ';margin-left:12px;">Disponible: ' + escapeHtml(monEq(saldo)) + '</span>';
     }
@@ -5425,9 +5457,10 @@ function _pubCollectCard(id) {
     p.cierres = Object.values(cieMap).map(c => {
         const mensajes = Number(c.mensajes) || 0;
         const derivados = Number(c.derivados) || 0;
+        const cargasARS = Number(c.cargasARS) || 0;
         // En modo "por mensaje" el consumo es auto: mensajes × costo/msj.
         const consumoARS = _esPorMsj ? (mensajes * _cv) : (Number(c.consumoARS) || 0);
-        return { id: c.id, fecha: c.fecha || '', consumoARS, mensajes, derivados };
+        return { id: c.id, fecha: c.fecha || '', cargasARS, consumoARS, mensajes, derivados };
     });
     return p;
 }
@@ -5457,7 +5490,7 @@ function pubAddCierre(id) {
     const p = _publicistasCache.find(x => x.id === id);
     if (!p) return;
     p.cierres = p.cierres || [];
-    p.cierres.push({ id: 'cie_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7), fecha: _pubToday(), consumoARS: 0, mensajes: 0, derivados: 0 });
+    p.cierres.push({ id: 'cie_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7), fecha: _pubToday(), cargasARS: 0, consumoARS: 0, mensajes: 0, derivados: 0 });
     _pubExpanded[id] = true;
     _renderPublicistas();
 }
