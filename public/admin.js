@@ -5070,6 +5070,7 @@ function _pubReportFilterChange() {
     _renderPublicistas();
 }
 function _pubReportClearFilter() {
+    _pubCollectAll();
     _pubFilterFrom = ''; _pubFilterTo = ''; _pubFilterAgency = '';
     _renderPublicistas();
 }
