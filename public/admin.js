@@ -682,7 +682,7 @@ function _inlineUploadBtn(rid, row, kind, teamSlot, label, locked) {
     // Aplica también al pegar (paste de screenshot ya copiado).
     const dropAttrs = disabled ? ''
         : ' data-cls-drop="1" data-cls-rid="' + rid + '" data-cls-kind="' + kind + '" data-cls-teamslot="' + (teamSlot != null ? Number(teamSlot) : '') + '"';
-    const hint = disabled ? '' : ' · tocá, arrastrá o pegá (Ctrl+V) con el mouse encima';
+    const hint = disabled ? '' : ' · tocá para pegar (Ctrl+V) o elegir archivo · o arrastrá la foto';
     let html = '<span' + dropAttrs + ' style="display:inline-flex;align-items:center;gap:4px;padding:2px;border-radius:6px;transition:background 0.12s;">';
     html += '<button type="button" onclick="' + onClick + '" title="' + (isNew ? 'Guardá primero el cierre' : 'Adjuntar foto · ' + count + '/' + COMP_MAX_PER_KIND_DISPLAY + hint) + '" style="background:' + bg + ';border:1px dashed ' + border + ';color:' + color + ';padding:3px 8px;border-radius:5px;font-size:10px;font-weight:700;cursor:' + cursor + ';display:inline-flex;align-items:center;gap:4px;white-space:nowrap;">' + label + (count > 0 ? ' <span style="background:rgba(0,212,255,0.30);color:#fff;border-radius:8px;padding:0 5px;font-size:9.5px;">' + count + '</span>' : '') + '</button>';
     html += '</span>';
@@ -1037,7 +1037,6 @@ function _wireClosingsLiveRecompute() {
         closingsRecompute(rid);
     });
     _wireClosingsDragDrop();
-    _wireClosingsPaste();
 }
 
 // Drag & drop de fotos en CUALQUIER zona [data-cls-drop]. El usuario
@@ -1094,76 +1093,6 @@ function _wireClosingsDragDrop() {
             return;
         }
         // Reutilizar el flujo de uploads: setear state y simular onClosingFilePicked
-        await _uploadClosingFiles(rid, kind, teamSlot, imgs);
-    });
-}
-
-// Pegar (Ctrl+V) una foto en una zona de cierre. El usuario hace un
-// recorte de pantalla (Win+Shift+S, etc.) y lo pega directo sobre el
-// botón "📷 Foto" que tenga el mouse encima. La última zona apuntada
-// queda "armada" con un aro cyan para que se vea dónde va a caer.
-let _clsPasteTarget = null;
-
-function _clsSetPasteTarget(zone) {
-    if (_clsPasteTarget === zone) return;
-    if (_clsPasteTarget && _clsPasteTarget.isConnected) {
-        _clsPasteTarget.style.boxShadow = '';
-        _clsPasteTarget.style.background = '';
-    }
-    _clsPasteTarget = zone || null;
-    if (_clsPasteTarget) {
-        _clsPasteTarget.style.boxShadow = '0 0 0 2px rgba(0,212,255,0.55)';
-        _clsPasteTarget.style.background = 'rgba(0,212,255,0.10)';
-    }
-}
-
-function _wireClosingsPaste() {
-    if (document.body.dataset.clsPasteWired === '1') return;
-    document.body.dataset.clsPasteWired = '1';
-
-    const findDropTarget = (el) => {
-        while (el && el.dataset) {
-            if (el.dataset.clsDrop === '1') return el;
-            el = el.parentElement;
-        }
-        return null;
-    };
-
-    // Al pasar el mouse por una zona de foto, queda "armada" para pegar.
-    document.body.addEventListener('mouseover', (e) => {
-        const t = findDropTarget(e.target);
-        if (t) _clsSetPasteTarget(t);
-    });
-
-    document.addEventListener('paste', async (e) => {
-        const cd = e.clipboardData;
-        if (!cd) return;
-        const imgs = [];
-        for (const it of Array.from(cd.items || [])) {
-            if (it.kind === 'file' && it.type && it.type.startsWith('image/')) {
-                const f = it.getAsFile();
-                if (f) imgs.push(f);
-            }
-        }
-        if (imgs.length === 0) return; // pegada de texto u otra cosa — ignorar
-        e.preventDefault();
-        const zone = _clsPasteTarget;
-        if (!zone || !zone.isConnected) {
-            const closingsActive = document.getElementById('closingsSection');
-            if (closingsActive && closingsActive.classList.contains('active')) {
-                showToast('Pasá el mouse sobre un botón 📷 Foto y pegá de nuevo (Ctrl+V)', 'info');
-            }
-            return;
-        }
-        const rid = zone.dataset.clsRid;
-        const kind = zone.dataset.clsKind;
-        const teamSlotRaw = zone.dataset.clsTeamslot;
-        const teamSlot = teamSlotRaw === '' || teamSlotRaw == null ? null : Number(teamSlotRaw);
-        if (!rid || !kind) return;
-        if (String(rid).startsWith('new_')) {
-            showToast('Guardá el cierre primero — después podés pegar fotos.', 'info');
-            return;
-        }
         await _uploadClosingFiles(rid, kind, teamSlot, imgs);
     });
 }
@@ -1713,8 +1642,77 @@ function openClosingUpload(rid, kind, teamSlot) {
         return;
     }
     _closingUploadState[rid] = { kind, teamSlot: (teamSlot != null ? Number(teamSlot) : null) };
-    const fileEl = document.getElementById('cls_' + rid + '_file');
-    if (fileEl) fileEl.click();
+    _openClosingUploadModal(rid, kind, (teamSlot != null ? Number(teamSlot) : null));
+}
+
+// Modal de adjuntar foto: ofrece pegar (Ctrl+V), arrastrar o elegir
+// archivo. Al estar abierto captura el paste de toda la página, así el
+// usuario hace el recorte y aprieta Ctrl+V sin tener que apuntar nada.
+function _openClosingUploadModal(rid, kind, teamSlot) {
+    document.getElementById('clsUploadModal')?.remove();
+    const overlay = document.createElement('div');
+    overlay.id = 'clsUploadModal';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:99999;display:flex;align-items:center;justify-content:center;padding:20px;';
+    overlay.innerHTML =
+        '<div style="background:#10131a;border:1.5px solid rgba(0,212,255,0.45);border-radius:14px;padding:22px;max-width:420px;width:100%;color:#fff;box-shadow:0 0 40px rgba(0,212,255,0.20);">' +
+        '<div style="text-align:center;margin-bottom:14px;"><div style="font-size:30px;">📷</div>' +
+        '<h3 style="margin:4px 0 2px;color:#00d4ff;font-size:16px;">Adjuntar foto</h3></div>' +
+        '<div id="clsPasteZone" tabindex="0" style="border:2px dashed rgba(0,212,255,0.55);border-radius:12px;padding:24px 14px;text-align:center;cursor:pointer;outline:none;background:rgba(0,212,255,0.06);">' +
+        '<div style="font-size:26px;margin-bottom:6px;">📋</div>' +
+        '<div style="color:#00d4ff;font-weight:900;font-size:14px;">Pegá la captura acá</div>' +
+        '<div style="color:#999;font-size:11.5px;margin-top:5px;line-height:1.5;">Hacé el recorte y apretá <strong>Ctrl+V</strong>.<br>También podés arrastrar la imagen o tocar para elegir un archivo.</div>' +
+        '</div>' +
+        '<div id="clsUploadMsg" style="min-height:15px;font-size:12px;text-align:center;margin:8px 0;"></div>' +
+        '<div style="display:flex;gap:8px;">' +
+        '<button type="button" id="clsUploadCancel" style="flex:1;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.20);color:#fff;padding:9px;border-radius:8px;font-weight:700;cursor:pointer;">Cerrar</button>' +
+        '<button type="button" id="clsUploadPick" style="flex:2;background:rgba(0,212,255,0.15);border:1px solid rgba(0,212,255,0.5);color:#00d4ff;padding:9px;border-radius:8px;font-weight:900;cursor:pointer;">📁 Elegir archivo</button>' +
+        '</div></div>';
+    document.body.appendChild(overlay);
+    const zone = document.getElementById('clsPasteZone');
+    const msg = document.getElementById('clsUploadMsg');
+    setTimeout(() => zone && zone.focus(), 30);
+
+    const extractImgs = (src) => {
+        const out = [];
+        for (const it of Array.from((src && src.items) || [])) {
+            if (it.kind === 'file' && it.type && it.type.startsWith('image/')) {
+                const f = it.getAsFile(); if (f) out.push(f);
+            }
+        }
+        if (out.length === 0) {
+            for (const f of Array.from((src && src.files) || [])) {
+                if (f.type && f.type.startsWith('image/')) out.push(f);
+            }
+        }
+        return out;
+    };
+    const close = () => { document.removeEventListener('paste', onPaste); overlay.remove(); };
+    const doUpload = async (imgs) => {
+        close();
+        await _uploadClosingFiles(rid, kind, teamSlot, imgs);
+    };
+    const onPaste = (e) => {
+        const imgs = extractImgs(e.clipboardData);
+        if (imgs.length === 0) { msg.style.color = '#ff8080'; msg.textContent = 'No hay una imagen en el portapapeles'; return; }
+        e.preventDefault();
+        doUpload(imgs);
+    };
+    document.addEventListener('paste', onPaste);
+    zone.addEventListener('dragover', (e) => { e.preventDefault(); zone.style.background = 'rgba(0,212,255,0.20)'; });
+    zone.addEventListener('dragleave', () => { zone.style.background = 'rgba(0,212,255,0.06)'; });
+    zone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        const imgs = extractImgs(e.dataTransfer);
+        if (imgs.length === 0) { msg.style.color = '#ff8080'; msg.textContent = 'Eso no es una imagen'; return; }
+        doUpload(imgs);
+    });
+    document.getElementById('clsUploadCancel').onclick = close;
+    document.getElementById('clsUploadPick').onclick = () => {
+        const fileEl = document.getElementById('cls_' + rid + '_file');
+        close();
+        if (fileEl) fileEl.click();
+    };
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
 }
 
 async function onClosingFilePicked(rid) {
