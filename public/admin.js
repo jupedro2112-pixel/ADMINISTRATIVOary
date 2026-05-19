@@ -4913,6 +4913,10 @@ function _pubReport(from, to, agencyId) {
 
 function _renderPubReport() {
     if (_publicistasCache.length === 0) return '';
+    // Si la agencia filtrada fue borrada, limpiamos el filtro para no mostrar todo en cero.
+    if (_pubFilterAgency && !_publicistasCache.find(p => p.id === _pubFilterAgency)) {
+        _pubFilterAgency = '';
+    }
     const r = _pubReport(_pubFilterFrom, _pubFilterTo, _pubFilterAgency);
     const agenciaSel = _pubFilterAgency ? _publicistasCache.find(p => p.id === _pubFilterAgency) : null;
     const agenciaSelNombre = agenciaSel ? (agenciaSel.nombre || '—') : '';
