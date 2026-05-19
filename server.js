@@ -1209,8 +1209,8 @@ app.get('/api/admin/closings', authMiddleware, closingsAccessMiddleware, async (
     });
     res.json({ success: true, rows: enriched, today, lite });
   } catch (err) {
-    logger.error(`/api/admin/closings: ${err.message}`);
-    res.status(500).json({ error: 'Error del servidor' });
+    logger.error(`/api/admin/closings: ${err.stack || err.message}`);
+    res.status(500).json({ error: 'Error del servidor — ' + (err.message || 'desconocido') });
   }
 });
 
@@ -1687,8 +1687,8 @@ app.get('/api/admin/closings/summary', authMiddleware, closingsAccessMiddleware,
     }
     res.json({ success: true, bySector: Object.values(bySector), totals, from, to });
   } catch (err) {
-    logger.error(`/api/admin/closings/summary: ${err.message}`);
-    res.status(500).json({ error: 'Error del servidor' });
+    logger.error(`/api/admin/closings/summary: ${err.stack || err.message}`);
+    res.status(500).json({ error: 'Error del servidor — ' + (err.message || 'desconocido') });
   }
 });
 
@@ -1821,8 +1821,8 @@ app.get('/api/admin/closings/analysis', authMiddleware, closingsAccessMiddleware
       alerts: { rojos, faltantes, sobrepagos, pendOK }
     });
   } catch (err) {
-    logger.error(`/api/admin/closings/analysis: ${err.message}`);
-    res.status(500).json({ error: 'Error del servidor' });
+    logger.error(`/api/admin/closings/analysis: ${err.stack || err.message}`);
+    res.status(500).json({ error: 'Error del servidor — ' + (err.message || 'desconocido') });
   }
 });
 
