@@ -2812,8 +2812,17 @@ async function _getPubPresets(req) {
   return v.map(x => String(x || '').trim()).filter(Boolean).slice(0, 100);
 }
 
+// Publicidad: solo disponible para el login principal (ignite1000).
+// El login `crazy` no ve la sección ni puede llamar a sus rutas.
+function _denyCrazy(req, res, next) {
+  if (_tenantOf(req) === 'crazy') {
+    return res.status(403).json({ error: 'Sección no disponible para este usuario' });
+  }
+  next();
+}
+
 // GET — lista todos los publicistas + los tipos de gasto predefinidos.
-app.get('/api/admin/publicistas', authMiddleware, adminMiddleware, async (req, res) => {
+app.get('/api/admin/publicistas', authMiddleware, adminMiddleware, _denyCrazy, async (req, res) => {
   try {
     const { Publicista } = _models(req);
     const items = await Publicista.find({}).sort({ nombre: 1 }).lean();
@@ -2825,7 +2834,7 @@ app.get('/api/admin/publicistas', authMiddleware, adminMiddleware, async (req, r
 });
 
 // PUT — guarda la lista de tipos de gasto predefinidos.
-app.put('/api/admin/publicidad/presets', authMiddleware, adminMiddleware, async (req, res) => {
+app.put('/api/admin/publicidad/presets', authMiddleware, adminMiddleware, _denyCrazy, async (req, res) => {
   try {
     const raw = (req.body && req.body.presets);
     if (!Array.isArray(raw)) return res.status(400).json({ error: 'presets debe ser una lista' });
@@ -2846,7 +2855,7 @@ app.put('/api/admin/publicidad/presets', authMiddleware, adminMiddleware, async 
 });
 
 // POST — crear un publicista nuevo.
-app.post('/api/admin/publicistas', authMiddleware, adminMiddleware, async (req, res) => {
+app.post('/api/admin/publicistas', authMiddleware, adminMiddleware, _denyCrazy, async (req, res) => {
   try {
     const { Publicista } = _models(req);
     const nombre = String((req.body && req.body.nombre) || '').trim().slice(0, 100);
@@ -2864,7 +2873,7 @@ app.post('/api/admin/publicistas', authMiddleware, adminMiddleware, async (req, 
 });
 
 // PUT — actualiza nombre/notas y reemplaza los envíos y cierres del publicista.
-app.put('/api/admin/publicistas/:id', authMiddleware, adminMiddleware, async (req, res) => {
+app.put('/api/admin/publicistas/:id', authMiddleware, adminMiddleware, _denyCrazy, async (req, res) => {
   try {
     const { Publicista } = _models(req);
     const id = String(req.params.id || '');
@@ -2893,7 +2902,7 @@ app.put('/api/admin/publicistas/:id', authMiddleware, adminMiddleware, async (re
 });
 
 // DELETE — borrar un publicista (requiere PIN 1818).
-app.delete('/api/admin/publicistas/:id', authMiddleware, adminMiddleware, async (req, res) => {
+app.delete('/api/admin/publicistas/:id', authMiddleware, adminMiddleware, _denyCrazy, async (req, res) => {
   try {
     const { Publicista } = _models(req);
     const id = String(req.params.id || '');

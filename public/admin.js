@@ -236,6 +236,11 @@ function showApp() {
     const nameEl = document.getElementById('adminName');
     if (nameEl) nameEl.textContent = (currentAdmin && currentAdmin.username) || 'Admin';
 
+    // Publicidad: solo para el login principal (ignite1000). Para `crazy` la ocultamos.
+    if (currentAdmin && currentAdmin.username === 'crazy') {
+        document.querySelectorAll('.nav-item[data-section="publicidad"]').forEach((el) => { el.style.display = 'none'; });
+    }
+
     // Arranca el polling del badge "users activos" al lado del adminName.
     try { startActiveUsersBadge(); } catch (_) {}
 
@@ -415,6 +420,10 @@ function _changeSectionPin(sectionKey, sectionLabel) {
 // NAVEGACIÓN ENTRE SECCIONES
 // ============================================
 function showSection(sectionKey) {
+    // Publicidad: bloqueada para `crazy` aunque fuerce la navegación.
+    if (sectionKey === 'publicidad' && currentAdmin && currentAdmin.username === 'crazy') {
+        return;
+    }
     // Pin gate: si la sección está protegida y no está desbloqueada, pedir PIN.
     // Excepción: en modo ?only=closings (usuario cierresgeneral) NO pedimos PIN
     // porque ese rol no es admin full y no puede llamar a /section-pins/verify.
