@@ -5225,7 +5225,9 @@ function _renderPubEnvios(p, envios) {
         h += '<div style="overflow-x:auto;"><div style="min-width:540px;">';
         h += '<div style="display:grid;grid-template-columns:' + cols + ';gap:6px;font-size:9px;color:#888;text-transform:uppercase;font-weight:700;margin-bottom:4px;">';
         h += '<div>Tipo</div><div>Fecha</div><div>Monto (' + (p.moneda === 'usdt' ? 'USDT' : '$') + ')</div><div>Detalle</div><div></div></div>';
-        for (const e of envios) {
+        // Ordenado por fecha desc (más nuevos arriba); empates desempatan por id desc.
+        const enviosSorted = envios.slice().sort((a, b) => (String(b.fecha || '')).localeCompare(String(a.fecha || '')) || (String(b.id || '')).localeCompare(String(a.id || '')));
+        for (const e of enviosSorted) {
             const eid = escapeHtml(e.id);
             const esPauta = e.tipo === 'pauta';
             h += '<div style="display:grid;grid-template-columns:' + cols + ';gap:6px;margin-bottom:4px;">';
@@ -5299,7 +5301,9 @@ function _renderPubCierres(p, cierres) {
             h += '<div>Fecha</div><div title="plata cargada ese día (opcional)">Cargas</div><div>Consumió</div><div>Mensajes</div><div>Derivados</div><div>Comisión (%)</div><div title="(consumo + comisión) ÷ derivados">CPM final</div><div>Conv. %</div><div></div>';
         }
         h += '</div>';
-        for (const c of cierres) {
+        // Ordenado por fecha desc (más nuevos arriba); empates desempatan por id desc.
+        const cierresSorted = cierres.slice().sort((a, b) => (String(b.fecha || '')).localeCompare(String(a.fecha || '')) || (String(b.id || '')).localeCompare(String(a.id || '')));
+        for (const c of cierresSorted) {
             const cid = escapeHtml(c.id);
             const mv = Number(c.mensajes) || 0, dv = Number(c.derivados) || 0;
             const conv = mv > 0 ? (dv / mv * 100) : 0;
