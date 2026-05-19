@@ -19,9 +19,14 @@
 const mongoose = require('mongoose');
 
 // Un envío de plata a la agencia. Puede haber varios por día.
+// tipo:
+//   'gasto' → gasto extraordinario (líneas API, Kommo, etc.).
+//   'pauta' → carga adelantada para el consumo de publicidad. Suma al
+//             saldo de pauta, del que después descuenta el consumo.
 const envioSchema = new mongoose.Schema({
   id: { type: String, required: true },
   fecha: { type: String, default: '' },          // YYYY-MM-DD
+  tipo: { type: String, enum: ['gasto', 'pauta'], default: 'gasto' },
   montoARS: { type: Number, default: 0, min: 0 }, // monto en la moneda de la agencia
   detalle: { type: String, default: '', trim: true, maxlength: 200 } // "líneas API", etc.
 }, { _id: false });

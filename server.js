@@ -2782,6 +2782,7 @@ function _normPubEnvios(arr) {
   return arr.slice(0, 2000).map(e => ({
     id: String((e && e.id) || `env_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`).slice(0, 60),
     fecha: (String((e && e.fecha) || '').match(/^\d{4}-\d{2}-\d{2}$/) ? e.fecha : ''),
+    tipo: ((e && e.tipo) === 'pauta') ? 'pauta' : 'gasto',
     montoARS: Math.max(0, Number((e && e.montoARS) || 0)),
     detalle: String((e && e.detalle) || '').trim().slice(0, 200)
   }));

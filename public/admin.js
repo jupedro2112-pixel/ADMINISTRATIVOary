@@ -4902,18 +4902,21 @@ function _renderPublicistas() {
 function _renderPublicistaCard(p) {
     const envios = Array.isArray(p.envios) ? p.envios : [];
     const cierres = Array.isArray(p.cierres) ? p.cierres : [];
-    const totalEnviado = envios.reduce((s, e) => s + (Number(e.montoARS) || 0), 0);
+    const totalPauta = envios.filter(e => e.tipo === 'pauta').reduce((s, e) => s + (Number(e.montoARS) || 0), 0);
+    const totalGasto = envios.filter(e => e.tipo !== 'pauta').reduce((s, e) => s + (Number(e.montoARS) || 0), 0);
     const totalConsumido = cierres.reduce((s, c) => s + (Number(c.consumoARS) || 0), 0);
     const totalComision = cierres.reduce((s, c) => s + _pubComision(p, c), 0);
     const totalDerivados = cierres.reduce((s, c) => s + (Number(c.derivados) || 0), 0);
     const cpmGen = totalDerivados > 0 ? (totalConsumido + totalComision) / totalDerivados : 0;
+    const saldoPauta = totalPauta - totalConsumido;
     const expanded = !!_pubExpanded[p.id];
     const pid = escapeHtml(p.id);
     let h = '<div data-pub-card="' + pid + '" style="background:rgba(0,0,0,0.30);border:1.5px solid rgba(255,128,0,0.35);border-radius:11px;padding:13px;margin-bottom:12px;">';
     h += '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">';
     h += '<span onclick="_pubToggle(\'' + pid + '\')" style="color:#ff8000;font-size:13px;cursor:pointer;">' + (expanded ? '▼' : '▶') + '</span>';
     h += '<input data-pub-field="nombre" type="text" value="' + escapeHtml(p.nombre || '') + '" maxlength="100" style="background:rgba(0,0,0,0.40);border:1px solid rgba(255,255,255,0.12);color:#fff;font-weight:900;font-size:13px;padding:5px 9px;border-radius:6px;flex:1;min-width:140px;">';
-    h += '<span title="Gastos extraordinarios (envíos)" style="color:#ffaa66;font-size:11px;font-weight:800;white-space:nowrap;">📤 ' + escapeHtml(_pubMonEq(p, totalEnviado)) + '</span>';
+    h += '<span title="Saldo de pauta = cargas adelantadas − consumo" style="color:' + (saldoPauta >= 0 ? '#66ff99' : '#ff7070') + ';font-size:11px;font-weight:800;white-space:nowrap;">💰 ' + escapeHtml(_pubMonEq(p, saldoPauta)) + '</span>';
+    h += '<span title="Gastos extraordinarios" style="color:#ffaa66;font-size:11px;font-weight:800;white-space:nowrap;">📦 ' + escapeHtml(_pubMonEq(p, totalGasto)) + '</span>';
     h += '<span title="Consumo de publicidad" style="color:#aaffaa;font-size:11px;font-weight:800;white-space:nowrap;">🔥 ' + escapeHtml(_pubMonEq(p, totalConsumido)) + '</span>';
     h += '<span title="Comisión" style="color:#ffd700;font-size:11px;font-weight:800;white-space:nowrap;">💸 ' + escapeHtml(_pubMonEq(p, totalComision)) + '</span>';
     h += '<span title="CPM final = (consumo + comisión) ÷ derivados" style="color:#ff9bd0;font-size:11px;font-weight:800;white-space:nowrap;">🎯 ' + (totalDerivados > 0 ? escapeHtml(_pubMon(p.moneda, cpmGen)) : '—') + '</span>';
@@ -4922,6 +4925,7 @@ function _renderPublicistaCard(p) {
     if (expanded) {
         h += _renderPubConfig(p);
         h += _renderPubEnvios(p, envios);
+        h += _renderPubSaldo(p);
         h += _renderPubCierres(p, cierres);
         h += '<div style="margin-top:10px;text-align:right;">';
         h += '<button type="button" onclick="guardarPublicista(\'' + pid + '\')" style="background:rgba(102,255,102,0.15);border:1px solid rgba(102,255,102,0.45);color:#aaffaa;padding:7px 18px;border-radius:8px;font-weight:900;font-size:12px;cursor:pointer;">💾 Guardar cambios</button>';
@@ -4960,7 +4964,7 @@ function _renderPubConfig(p) {
 
 function _renderPubEnvios(p, envios) {
     const pid = escapeHtml(p.id);
-    const cols = '120px 120px 1fr 30px';
+    const cols = '128px 110px 108px 1fr 30px';
     let h = '<div style="margin-top:10px;background:rgba(255,128,0,0.05);border:1px solid rgba(255,128,0,0.25);border-radius:9px;padding:10px;">';
     h += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:7px;">';
     h += '<span style="color:#ffaa66;font-weight:900;font-size:11px;letter-spacing:0.5px;">📤 ENVÍOS DE PLATA</span>';
@@ -4969,21 +4973,52 @@ function _renderPubEnvios(p, envios) {
     if (envios.length === 0) {
         h += '<div style="color:#777;font-size:10.5px;padding:3px;">Sin envíos cargados.</div>';
     } else {
+        h += '<div style="overflow-x:auto;"><div style="min-width:540px;">';
         h += '<div style="display:grid;grid-template-columns:' + cols + ';gap:6px;font-size:9px;color:#888;text-transform:uppercase;font-weight:700;margin-bottom:4px;">';
-        h += '<div>Fecha</div><div>Monto (' + (p.moneda === 'usdt' ? 'USDT' : '$') + ')</div><div>Detalle (líneas API, etc.)</div><div></div></div>';
+        h += '<div>Tipo</div><div>Fecha</div><div>Monto (' + (p.moneda === 'usdt' ? 'USDT' : '$') + ')</div><div>Detalle</div><div></div></div>';
         for (const e of envios) {
             const eid = escapeHtml(e.id);
+            const esPauta = e.tipo === 'pauta';
             h += '<div style="display:grid;grid-template-columns:' + cols + ';gap:6px;margin-bottom:4px;">';
+            h += '<select data-envio-id="' + eid + '" data-field="tipo" onchange="_pubCfgChanged(\'' + pid + '\')" style="' + _pubSel + 'width:100%;">';
+            h += '<option value="gasto"' + (!esPauta ? ' selected' : '') + '>Gasto extra</option>';
+            h += '<option value="pauta"' + (esPauta ? ' selected' : '') + '>Carga de pauta</option>';
+            h += '</select>';
             h += '<input data-envio-id="' + eid + '" data-field="fecha" type="date" value="' + escapeHtml(e.fecha || '') + '" style="' + _pubInp + '">';
             h += '<input data-envio-id="' + eid + '" data-field="montoARS" type="number" min="0" step="1" value="' + (Number(e.montoARS) || 0) + '" oninput="_pubRecalc(\'' + pid + '\')" style="' + _pubInp + '">';
-            h += _pubDetalleSelect(eid, e.detalle);
+            h += esPauta
+                ? '<input data-envio-id="' + eid + '" data-field="detalle" type="text" maxlength="200" value="' + escapeHtml(e.detalle || '') + '" placeholder="detalle de la carga (opcional)" style="' + _pubInp + '">'
+                : _pubDetalleSelect(eid, e.detalle);
             h += '<button type="button" onclick="pubDelEnvio(\'' + pid + '\',\'' + eid + '\')" style="background:rgba(255,80,80,0.10);color:#f55;border:1px solid rgba(255,80,80,0.30);border-radius:5px;cursor:pointer;font-size:10px;">✕</button>';
             h += '</div>';
         }
-        const tot = envios.reduce((s, e) => s + (Number(e.montoARS) || 0), 0);
-        h += '<div style="text-align:right;color:#ffaa66;font-size:11px;font-weight:900;margin-top:4px;" id="pubTotEnv_' + pid + '">Total enviado: ' + escapeHtml(_pubMonEq(p, tot)) + '</div>';
+        h += '</div></div>';
+        const totPauta = envios.filter(e => e.tipo === 'pauta').reduce((s, e) => s + (Number(e.montoARS) || 0), 0);
+        const totGasto = envios.filter(e => e.tipo !== 'pauta').reduce((s, e) => s + (Number(e.montoARS) || 0), 0);
+        h += '<div style="text-align:right;font-size:10.5px;font-weight:900;margin-top:5px;" id="pubTotEnv_' + pid + '">';
+        h += '<span style="color:#9fffc0;">💰 Cargas de pauta: ' + escapeHtml(_pubMonEq(p, totPauta)) + '</span>';
+        h += '<span style="color:#ffaa66;margin-left:12px;">📦 Gastos extra: ' + escapeHtml(_pubMonEq(p, totGasto)) + '</span>';
+        h += '</div>';
     }
     h += '</div>';
+    return h;
+}
+
+// Caja de saldo de pauta: cargas adelantadas − consumo = disponible.
+function _renderPubSaldo(p) {
+    const pid = escapeHtml(p.id);
+    const cargas = (Array.isArray(p.envios) ? p.envios : []).filter(e => e.tipo === 'pauta').reduce((s, e) => s + (Number(e.montoARS) || 0), 0);
+    const consumo = (Array.isArray(p.cierres) ? p.cierres : []).reduce((s, c) => s + (Number(c.consumoARS) || 0), 0);
+    const saldo = cargas - consumo;
+    const col = saldo >= 0 ? '#66ff99' : '#ff7070';
+    let h = '<div style="margin-top:10px;background:rgba(102,255,153,0.06);border:1.5px solid rgba(102,255,153,0.35);border-radius:9px;padding:10px 12px;">';
+    h += '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">';
+    h += '<span style="color:#9fffc0;font-weight:900;font-size:11px;letter-spacing:0.5px;">💰 SALDO DE PAUTA</span>';
+    h += '<span id="pubSaldo_' + pid + '" style="font-size:11.5px;font-weight:900;">';
+    h += '<span style="color:#aaa;">Cargado: ' + escapeHtml(_pubMonEq(p, cargas)) + '</span>';
+    h += '<span style="color:#aaa;margin-left:12px;">Consumido: ' + escapeHtml(_pubMonEq(p, consumo)) + '</span>';
+    h += '<span style="color:' + col + ';margin-left:12px;">Disponible: ' + escapeHtml(_pubMonEq(p, saldo)) + '</span>';
+    h += '</span></div></div>';
     return h;
 }
 
@@ -5077,10 +5112,28 @@ function _pubRecalc(pid) {
             '<span style="color:#fff;margin-left:12px;">Total: ' + escapeHtml(monEq(totCons + totCom)) + '</span>' +
             '<span style="color:#ff9bd0;margin-left:12px;">CPM final: ' + (totDer > 0 ? escapeHtml(_pubMon(moneda, cpmGen)) : '—') + '</span>';
     }
-    let totEnv = 0;
-    card.querySelectorAll('[data-envio-id][data-field="montoARS"]').forEach(el => { totEnv += Number(el.value) || 0; });
+    let totPauta = 0, totGasto = 0;
+    const eids = new Set();
+    card.querySelectorAll('[data-envio-id]').forEach(el => eids.add(el.getAttribute('data-envio-id')));
+    for (const eid of eids) {
+        const monEl = card.querySelector('[data-envio-id="' + eid + '"][data-field="montoARS"]');
+        const tipoEl = card.querySelector('[data-envio-id="' + eid + '"][data-field="tipo"]');
+        const monto = monEl ? Number(monEl.value) || 0 : 0;
+        if (tipoEl && tipoEl.value === 'pauta') totPauta += monto; else totGasto += monto;
+    }
     const totEnvEl = document.getElementById('pubTotEnv_' + pid);
-    if (totEnvEl) totEnvEl.textContent = 'Total enviado: ' + monEq(totEnv);
+    if (totEnvEl) {
+        totEnvEl.innerHTML = '<span style="color:#9fffc0;">💰 Cargas de pauta: ' + escapeHtml(monEq(totPauta)) + '</span>' +
+            '<span style="color:#ffaa66;margin-left:12px;">📦 Gastos extra: ' + escapeHtml(monEq(totGasto)) + '</span>';
+    }
+    const saldoEl = document.getElementById('pubSaldo_' + pid);
+    if (saldoEl) {
+        const saldo = totPauta - totCons;
+        const col = saldo >= 0 ? '#66ff99' : '#ff7070';
+        saldoEl.innerHTML = '<span style="color:#aaa;">Cargado: ' + escapeHtml(monEq(totPauta)) + '</span>' +
+            '<span style="color:#aaa;margin-left:12px;">Consumido: ' + escapeHtml(monEq(totCons)) + '</span>' +
+            '<span style="color:' + col + ';margin-left:12px;">Disponible: ' + escapeHtml(monEq(saldo)) + '</span>';
+    }
 }
 
 // Cambió un select de config: guardamos en cache y re-renderizamos para
@@ -5111,7 +5164,8 @@ function _pubCollectCard(id) {
         envMap[eid][el.getAttribute('data-field')] = el.value;
     });
     p.envios = Object.values(envMap).map(e => ({
-        id: e.id, fecha: e.fecha || '', montoARS: Number(e.montoARS) || 0, detalle: e.detalle || ''
+        id: e.id, fecha: e.fecha || '', tipo: (e.tipo === 'pauta') ? 'pauta' : 'gasto',
+        montoARS: Number(e.montoARS) || 0, detalle: e.detalle || ''
     }));
     const cieMap = {};
     card.querySelectorAll('[data-cierre-id]').forEach(el => {
@@ -5141,7 +5195,7 @@ function pubAddEnvio(id) {
     const p = _publicistasCache.find(x => x.id === id);
     if (!p) return;
     p.envios = p.envios || [];
-    p.envios.push({ id: 'env_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7), fecha: _pubToday(), montoARS: 0, detalle: '' });
+    p.envios.push({ id: 'env_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7), fecha: _pubToday(), tipo: 'gasto', montoARS: 0, detalle: '' });
     _pubExpanded[id] = true;
     _renderPublicistas();
 }
