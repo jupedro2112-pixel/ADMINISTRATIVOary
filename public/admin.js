@@ -4864,6 +4864,7 @@ function _pubReport(from, to, agencyId) {
     const r = {
         totalPautaCargadaARS: 0, totalGastoExtraARS: 0,
         totalConsumoARS: 0, totalComisionARS: 0,
+        totalCargasUsuariosARS: 0, // cargas de USUARIO (dato extra, no se mezcla con pauta)
         totalMensajes: 0, totalDerivados: 0,
         porDia: {}, porAgencia: [], usdtSinRate: []
     };
@@ -4871,7 +4872,7 @@ function _pubReport(from, to, agencyId) {
     for (const p of _publicistasCache) {
         if (ag && p.id !== ag) continue;
         if (p.moneda === 'usdt' && !(Number(p.usdtRate) > 0)) r.usdtSinRate.push(p.nombre || p.id);
-        let agCargada = 0, agGasto = 0, agConsumo = 0, agComision = 0, agMsj = 0, agDer = 0;
+        let agCargada = 0, agGasto = 0, agConsumo = 0, agComision = 0, agMsj = 0, agDer = 0, agCargasUsr = 0;
         for (const e of (p.envios || [])) {
             if (!_pubInRange(e.fecha, from, to)) continue;
             const ars = _pubToARS(p, e.montoARS);
@@ -4881,15 +4882,14 @@ function _pubReport(from, to, agencyId) {
             if (!_pubInRange(c.fecha, from, to)) continue;
             const consumoARS = _pubToARS(p, _pubConsumo(p, c));
             const comisionARS = _pubToARS(p, _pubComision(p, c));
-            const cargasARS = _pubToARS(p, Number(c.cargasARS) || 0);
+            const cargasUsrARS = _pubToARS(p, Number(c.cargasARS) || 0);
             const msj = Number(c.mensajes) || 0;
             const der = Number(c.derivados) || 0;
-            agCargada += cargasARS; // las cargas del día tambien suman a pauta cargada
-            agConsumo += consumoARS; agComision += comisionARS;
+            agConsumo += consumoARS; agComision += comisionARS; agCargasUsr += cargasUsrARS;
             agMsj += msj; agDer += der;
             const d = c.fecha || '';
-            if (!r.porDia[d]) r.porDia[d] = { cargas: 0, consumo: 0, comision: 0, mensajes: 0, derivados: 0 };
-            r.porDia[d].cargas += cargasARS;
+            if (!r.porDia[d]) r.porDia[d] = { cargasUsr: 0, consumo: 0, comision: 0, mensajes: 0, derivados: 0 };
+            r.porDia[d].cargasUsr += cargasUsrARS;
             r.porDia[d].consumo += consumoARS;
             r.porDia[d].comision += comisionARS;
             r.porDia[d].mensajes += msj;
@@ -4899,13 +4899,15 @@ function _pubReport(from, to, agencyId) {
         r.totalGastoExtraARS += agGasto;
         r.totalConsumoARS += agConsumo;
         r.totalComisionARS += agComision;
+        r.totalCargasUsuariosARS += agCargasUsr;
         r.totalMensajes += agMsj;
         r.totalDerivados += agDer;
         r.porAgencia.push({
             id: p.id, nombre: p.nombre || '—', moneda: p.moneda,
             comisionTipo: p.comisionTipo, comisionValor: Number(p.comisionValor) || 0,
             cargadaARS: agCargada, gastoARS: agGasto, consumoARS: agConsumo,
-            comisionARS: agComision, mensajes: agMsj, derivados: agDer
+            comisionARS: agComision, cargasUsrARS: agCargasUsr,
+            mensajes: agMsj, derivados: agDer
         });
     }
     return r;
@@ -4976,6 +4978,7 @@ function _renderPubReport() {
         { lbl: '📦 GASTOS EXTRA',    val: _pubFmt(r.totalGastoExtraARS),     col: '#ffaa66', tip: 'líneas API, Kommo, etc.' },
         { lbl: '💸 COMISIONES',      val: _pubFmt(r.totalComisionARS),       col: '#ffd700', tip: 'agencias con comisión %' },
         { lbl: '💼 INVERSIÓN TOTAL', val: _pubFmt(totalInversion + r.totalGastoExtraARS), col: '#fff', tip: 'consumo + comisiones + gastos extra' },
+        { lbl: '👥 CARGAS USUARIOS', val: _pubFmt(r.totalCargasUsuariosARS), col: '#7be0ff', tip: 'dato extra: cargas reportadas en los cierres (no afecta pauta)' },
         { lbl: '✉️ MENSAJES',        val: r.totalMensajes.toLocaleString('es-AR'),  col: '#00d4ff' },
         { lbl: '🎯 DERIVADOS',       val: r.totalDerivados.toLocaleString('es-AR'), col: '#00d4ff' },
         { lbl: '📈 CONVERSIÓN',      val: convGlobal.toFixed(1) + '%',       col: '#aaffaa', tip: 'derivados ÷ mensajes' },
@@ -5030,7 +5033,7 @@ function _renderPubReport() {
         h += '<div style="color:#ccc;font-weight:900;font-size:11px;letter-spacing:0.5px;margin-bottom:6px;">📅 POR DÍA</div>';
         h += '<div style="overflow-x:auto;max-height:340px;overflow-y:auto;"><div style="min-width:660px;">';
         h += '<div style="display:grid;grid-template-columns:' + cols + ';gap:6px;font-size:8.5px;color:#888;text-transform:uppercase;font-weight:700;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.08);position:sticky;top:0;background:rgba(0,0,0,0.50);">';
-        h += '<div>Fecha</div><div>Cargas</div><div>Consumo</div><div>Comisión</div><div>Msj</div><div>Deriv</div><div>CPM final</div><div>Conv.%</div></div>';
+        h += '<div>Fecha</div><div title="cargas de usuario reportadas (dato extra)">Cargas usr</div><div>Consumo</div><div>Comisión</div><div>Msj</div><div>Deriv</div><div>CPM final</div><div>Conv.%</div></div>';
         const diasDesc = dias.slice().sort((a, b) => a < b ? 1 : -1);
         for (const d of diasDesc) {
             const dd = r.porDia[d];
@@ -5038,7 +5041,7 @@ function _renderPubReport() {
             const conv = dd.mensajes > 0 ? (dd.derivados / dd.mensajes * 100) : 0;
             h += '<div style="display:grid;grid-template-columns:' + cols + ';gap:6px;font-size:10.5px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,0.04);">';
             h += '<div style="color:#fff;font-weight:800;">' + escapeHtml(d) + '</div>';
-            h += '<div style="color:#9fffc0;font-weight:800;">' + (dd.cargas > 0 ? _pubFmt(dd.cargas) : '—') + '</div>';
+            h += '<div style="color:#7be0ff;font-weight:800;">' + (dd.cargasUsr > 0 ? _pubFmt(dd.cargasUsr) : '—') + '</div>';
             h += '<div style="color:#aaffaa;font-weight:800;">' + _pubFmt(dd.consumo) + '</div>';
             h += '<div style="color:#ffd700;font-weight:800;">' + (dd.comision > 0 ? _pubFmt(dd.comision) : '—') + '</div>';
             h += '<div style="color:#00d4ff;">' + dd.mensajes.toLocaleString('es-AR') + '</div>';
@@ -5151,9 +5154,8 @@ function _renderPublicistaCard(p) {
     const envios = Array.isArray(p.envios) ? p.envios : [];
     const cierres = Array.isArray(p.cierres) ? p.cierres : [];
     const esPorMsj = p.comisionTipo === 'por_mensaje';
-    const totalPautaEnvios = envios.filter(e => e.tipo === 'pauta').reduce((s, e) => s + (Number(e.montoARS) || 0), 0);
-    const totalCargasCie = cierres.reduce((s, c) => s + (Number(c.cargasARS) || 0), 0);
-    const totalPauta = totalPautaEnvios + totalCargasCie;
+    // Cargas del cierre = cargas de USUARIO (dato extra, separado). NO suma a pauta.
+    const totalPauta = envios.filter(e => e.tipo === 'pauta').reduce((s, e) => s + (Number(e.montoARS) || 0), 0);
     const totalGasto = envios.filter(e => e.tipo !== 'pauta').reduce((s, e) => s + (Number(e.montoARS) || 0), 0);
     const totalConsumido = cierres.reduce((s, c) => s + _pubConsumo(p, c), 0);
     const totalComision = cierres.reduce((s, c) => s + _pubComision(p, c), 0);
@@ -5262,9 +5264,9 @@ function _renderPubEnvios(p, envios) {
 // Caja de saldo de pauta: cargas adelantadas − consumo = disponible.
 function _renderPubSaldo(p) {
     const pid = escapeHtml(p.id);
-    const cargasEnvios = (Array.isArray(p.envios) ? p.envios : []).filter(e => e.tipo === 'pauta').reduce((s, e) => s + (Number(e.montoARS) || 0), 0);
-    const cargasCierres = (Array.isArray(p.cierres) ? p.cierres : []).reduce((s, c) => s + (Number(c.cargasARS) || 0), 0);
-    const cargas = cargasEnvios + cargasCierres;
+    // Las "cargas" del cierre NO entran acá: son cargas de usuario (dato
+    // informativo aparte), no plata cargada a la pauta.
+    const cargas = (Array.isArray(p.envios) ? p.envios : []).filter(e => e.tipo === 'pauta').reduce((s, e) => s + (Number(e.montoARS) || 0), 0);
     const consumo = (Array.isArray(p.cierres) ? p.cierres : []).reduce((s, c) => s + _pubConsumo(p, c), 0);
     const saldo = cargas - consumo;
     const col = saldo >= 0 ? '#66ff99' : '#ff7070';
@@ -5300,9 +5302,9 @@ function _renderPubCierres(p, cierres) {
         h += '<div style="min-width:' + (esPorMsj ? '630px' : '690px') + ';">';
         h += '<div style="display:grid;grid-template-columns:' + cols + ';gap:5px;font-size:8.5px;color:#888;text-transform:uppercase;font-weight:700;margin-bottom:4px;">';
         if (esPorMsj) {
-            h += '<div>Fecha</div><div title="plata cargada ese día (opcional)">Cargas</div><div>Mensajes</div><div>Derivados</div><div title="mensajes × costo/msj">Consumió (auto)</div><div title="consumo ÷ derivados">CPM final</div><div>Conv. %</div><div></div>';
+            h += '<div>Fecha</div><div title="cargas de usuario reportadas ese día (dato extra, no afecta saldo)">Cargas usr</div><div>Mensajes</div><div>Derivados</div><div title="mensajes × costo/msj">Consumió (auto)</div><div title="consumo ÷ derivados">CPM final</div><div>Conv. %</div><div></div>';
         } else {
-            h += '<div>Fecha</div><div title="plata cargada ese día (opcional)">Cargas</div><div>Consumió</div><div>Mensajes</div><div>Derivados</div><div>Comisión (%)</div><div title="(consumo + comisión) ÷ derivados">CPM final</div><div>Conv. %</div><div></div>';
+            h += '<div>Fecha</div><div title="cargas de usuario reportadas ese día (dato extra, no afecta saldo)">Cargas usr</div><div>Consumió</div><div>Mensajes</div><div>Derivados</div><div>Comisión (%)</div><div title="(consumo + comisión) ÷ derivados">CPM final</div><div>Conv. %</div><div></div>';
         }
         h += '</div>';
         // Ordenado por fecha asc (más viejas arriba); empates desempatan por id asc.
@@ -5316,7 +5318,7 @@ function _renderPubCierres(p, cierres) {
             const cpm = _pubCpm(p, c);
             h += '<div style="display:grid;grid-template-columns:' + cols + ';gap:5px;margin-bottom:4px;">';
             h += '<input data-cierre-id="' + cid + '" data-field="fecha" type="date" value="' + escapeHtml(c.fecha || '') + '" style="' + _pubInp + '">';
-            h += '<input data-cierre-id="' + cid + '" data-field="cargasARS" type="number" min="0" step="1" value="' + (Number(c.cargasARS) || 0) + '" oninput="_pubRecalc(\'' + pid + '\')" title="plata cargada ese día (opcional)" placeholder="0" style="' + _pubInp + '">';
+            h += '<input data-cierre-id="' + cid + '" data-field="cargasARS" type="number" min="0" step="1" value="' + (Number(c.cargasARS) || 0) + '" oninput="_pubRecalc(\'' + pid + '\')" title="cargas de usuario reportadas ese día (dato extra, no afecta saldo)" placeholder="0" style="' + _pubInp + '">';
             if (esPorMsj) {
                 h += '<input data-cierre-id="' + cid + '" data-field="mensajes" type="number" min="0" step="1" value="' + mv + '" oninput="_pubRecalc(\'' + pid + '\')" style="' + _pubInp + '">';
                 h += '<input data-cierre-id="' + cid + '" data-field="derivados" type="number" min="0" step="1" value="' + dv + '" oninput="_pubRecalc(\'' + pid + '\')" style="' + _pubInp + '">';
@@ -5366,7 +5368,7 @@ function _pubRecalc(pid) {
         return s;
     };
     const esPorMsj = tipo === 'por_mensaje';
-    let totCons = 0, totCom = 0, totDer = 0, totCargasCie = 0;
+    let totCons = 0, totCom = 0, totDer = 0;
     const cids = new Set();
     card.querySelectorAll('[data-cierre-id]').forEach(el => cids.add(el.getAttribute('data-cierre-id')));
     for (const cid of cids) {
@@ -5385,7 +5387,6 @@ function _pubRecalc(pid) {
         if (convEl) convEl.textContent = conv.toFixed(1) + '%';
         if (cpmEl) cpmEl.textContent = derivados > 0 ? _pubMon(moneda, cpm) : '—';
         totCons += consumo; totCom += com; totDer += derivados;
-        totCargasCie += g('cargasARS');
     }
     const totCieEl = document.getElementById('pubTotCie_' + pid);
     if (totCieEl) {
@@ -5414,10 +5415,9 @@ function _pubRecalc(pid) {
     }
     const saldoEl = document.getElementById('pubSaldo_' + pid);
     if (saldoEl) {
-        const cargado = totPauta + totCargasCie;
-        const saldo = cargado - totCons;
+        const saldo = totPauta - totCons;
         const col = saldo >= 0 ? '#66ff99' : '#ff7070';
-        saldoEl.innerHTML = '<span style="color:#aaa;">Cargado: ' + escapeHtml(monEq(cargado)) + '</span>' +
+        saldoEl.innerHTML = '<span style="color:#aaa;">Cargado: ' + escapeHtml(monEq(totPauta)) + '</span>' +
             '<span style="color:#aaa;margin-left:12px;">Consumido: ' + escapeHtml(monEq(totCons)) + '</span>' +
             '<span style="color:' + col + ';margin-left:12px;">Disponible: ' + escapeHtml(monEq(saldo)) + '</span>';
     }
