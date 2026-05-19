@@ -1188,7 +1188,14 @@ app.get('/api/admin/closings', authMiddleware, closingsAccessMiddleware, async (
     if (from) filter.dateKey.$gte = from;
     if (to)   filter.dateKey.$lte = to;
     if (sector) filter.sector = sector;
-    const rows = await ClosingEntry.find(filter).sort({ dateKey: -1, sector: 1, teamSlot: 1 }).lean();
+    // En modo lite excluimos los campos pesados (las fotos guardadas como
+    // base64 viven en comprobantes.url y en editHistory.before/after). Sin
+    // esto, traer 60 días de cierres descarga cientos de MB desde Mongo y
+    // la query corta por timeout. El listado no necesita esas imágenes.
+    const projection = lite
+      ? { 'comprobantes.url': 0, 'editHistory.before': 0, 'editHistory.after': 0 }
+      : {};
+    const rows = await ClosingEntry.find(filter, projection).sort({ dateKey: -1, sector: 1, teamSlot: 1 }).lean();
     const enriched = rows.map(r => {
       const comprobantes = lite && Array.isArray(r.comprobantes)
         ? r.comprobantes.map(c => ({
@@ -1634,7 +1641,9 @@ app.get('/api/admin/closings/summary', authMiddleware, closingsAccessMiddleware,
     if (from) filter.dateKey.$gte = from;
     if (to)   filter.dateKey.$lte = to;
     if (sector) filter.sector = sector;
-    const rows = await ClosingEntry.find(filter).lean();
+    // El resumen no usa fotos ni historial — los excluimos para no
+    // descargar los base64 pesados y evitar timeouts de Mongo.
+    const rows = await ClosingEntry.find(filter, { comprobantes: 0, editHistory: 0 }).lean();
     const bySector = {};
     for (const r of rows) {
       const c = _closingComputeTotals(r);
@@ -1773,8 +1782,8 @@ app.get('/api/admin/closings/analysis', authMiddleware, closingsAccessMiddleware
     }
 
     const [currentRows, previousRows] = await Promise.all([
-      ClosingEntry.find(buildFilter(curFrom, curTo)).lean(),
-      ClosingEntry.find(buildFilter(prevFrom, prevTo)).lean()
+      ClosingEntry.find(buildFilter(curFrom, curTo), { 'comprobantes.url': 0, editHistory: 0 }).lean(),
+      ClosingEntry.find(buildFilter(prevFrom, prevTo), { 'comprobantes.url': 0, editHistory: 0 }).lean()
     ]);
 
     const current = aggregate(currentRows);
