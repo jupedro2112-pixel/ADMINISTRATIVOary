@@ -1303,7 +1303,7 @@ app.post('/api/admin/closings', authMiddleware, closingsAccessMiddleware, async 
     let pendienteAnterior = Number(b.pendienteAnteriorARS) || 0;
     if (!b.pendienteAnteriorARS && b.pendienteAnteriorARS !== 0) {
       const prevDateKey = new Date(new Date(dateKey).getTime() - 24 * 3600 * 1000).toISOString().slice(0, 10);
-      const prev = await ClosingEntry.findOne({ dateKey: prevDateKey, sector, teamSlot: null }).lean();
+      const prev = await ClosingEntry.findOne({ dateKey: prevDateKey, sector, teamSlot: null }, { comprobantes: 0, editHistory: 0 }).lean();
       if (prev) {
         const c = _closingComputeTotals(prev);
         pendienteAnterior = c.pendienteHoy || 0;
@@ -1339,7 +1339,7 @@ app.post('/api/admin/closings', authMiddleware, closingsAccessMiddleware, async 
       createdBy: req.user.username || ''
     };
 
-    // Los 3 sectores funcionan igual: 7 slots de equipo, totales = suma de teams.
+    // Los 3 sectores funcionan igual: hasta 10 slots de equipo, totales = suma de teams.
     {
       const teams = _normalizeBuffaloTeams(b.teams);
       const agg = _aggregateBuffaloTeams(teams);
@@ -1364,8 +1364,8 @@ app.post('/api/admin/closings', authMiddleware, closingsAccessMiddleware, async 
       throw e;
     }
   } catch (err) {
-    logger.error(`POST /api/admin/closings: ${err.message}\nstack: ${err.stack}\nbody keys: ${Object.keys(req.body || {}).join(',')}`);
-    res.status(500).json({ error: 'Error del servidor' });
+    logger.error(`POST /api/admin/closings: ${err.stack || err.message}`);
+    res.status(500).json({ error: 'Error del servidor — ' + (err.message || 'desconocido') });
   }
 });
 
@@ -1375,7 +1375,10 @@ app.put('/api/admin/closings/:id', authMiddleware, closingsAccessMiddleware, asy
   try {
     const { ClosingEntry } = _models(req);
     const id = String(req.params.id || '');
-    const c = await ClosingEntry.findOne({ id });
+    // findOne SIN los campos pesados (comprobantes/editHistory pueden pesar
+    // varios MB por las fotos base64). Solo necesitamos los escalares +
+    // teams + estado para hacer el diff y el chequeo de bloqueo.
+    const c = await ClosingEntry.findOne({ id }, { comprobantes: 0, editHistory: 0 }).lean();
     if (!c) return res.status(404).json({ error: 'Cierre no encontrado' });
     if (_closingIsLocked(c)) {
       return res.status(403).json({
@@ -1392,10 +1395,12 @@ app.put('/api/admin/closings/:id', authMiddleware, closingsAccessMiddleware, asy
       'gastosARS','gastosNote','saldoInicialARS','saldoInicialNote','cvuMidnightARS',
       'transactionsCount','bonusNote','notes'
     ];
-    const hasTeams = true;
     const b = req.body || {};
     const username = req.user.username || '';
     const changes = [];
+    // setObj acumula solo los campos que cambian — se persiste con un
+    // updateOne($set) en vez de reescribir el documento entero (save()).
+    const setObj = {};
     for (const f of editable) {
       if (!(f in b)) continue;
       let v = b[f];
@@ -1414,11 +1419,11 @@ app.put('/api/admin/closings/:id', authMiddleware, closingsAccessMiddleware, asy
       }
       if (c[f] !== v) {
         changes.push({ editedAt: new Date(), editedBy: username, field: f, before: c[f], after: v });
-        c[f] = v;
+        setObj[f] = v;
       }
     }
     // Buffalo o Ganamos: si llega teams[], normalizamos + recomputamos totales.
-    if (hasTeams && Array.isArray(b.teams)) {
+    if (Array.isArray(b.teams)) {
       const newTeams = _normalizeBuffaloTeams(b.teams);
       const before = c.teams
         ? c.teams.map(t => ({ slot:t.slot, name:t.name, depositsARS:t.depositsARS, depositsCount:t.depositsCount, ventasARS:t.ventasARS, bonusARS:t.bonusARS, bonusCount:t.bonusCount, withdrawalsCount:t.withdrawalsCount }))
@@ -1426,28 +1431,29 @@ app.put('/api/admin/closings/:id', authMiddleware, closingsAccessMiddleware, asy
       const sameJson = JSON.stringify(before) === JSON.stringify(newTeams);
       if (!sameJson) {
         changes.push({ editedAt: new Date(), editedBy: username, field: 'teams', before, after: newTeams });
-        c.teams = newTeams;
         const agg = _aggregateBuffaloTeams(newTeams);
-        c.depositsARS = agg.depositsARS;
-        c.ventasARS = agg.ventasARS;
-        c.bonusARS = agg.bonusARS;
-        c.bonusCount = agg.bonusCount;
-        c.withdrawalsCount = agg.withdrawalsCount;
+        setObj.teams = newTeams;
+        setObj.depositsARS = agg.depositsARS;
+        setObj.ventasARS = agg.ventasARS;
+        setObj.bonusARS = agg.bonusARS;
+        setObj.bonusCount = agg.bonusCount;
+        setObj.withdrawalsCount = agg.withdrawalsCount;
       }
     }
     if (changes.length === 0) {
-      return res.json({ success: true, row: { ...c.toObject(), computed: _closingComputeTotals(c), locked: _closingIsLocked(c) }, message: 'Sin cambios' });
+      return res.json({ success: true, changesCount: 0, message: 'Sin cambios' });
     }
-    c.editHistory.push(...changes);
-    await c.save();
-    res.json({
-      success: true,
-      row: { ...c.toObject(), computed: _closingComputeTotals(c), locked: _closingIsLocked(c) },
-      changesCount: changes.length
+    // updateOne con $set/$push: Mongo modifica los campos en el lugar sin
+    // reescribir el documento entero — rápido aunque el cierre tenga MB
+    // de fotos en comprobantes.
+    await ClosingEntry.updateOne({ id }, {
+      $set: setObj,
+      $push: { editHistory: { $each: changes } }
     });
+    res.json({ success: true, changesCount: changes.length });
   } catch (err) {
-    logger.error(`PUT /api/admin/closings/:id: ${err.message}\nstack: ${err.stack}\nbody keys: ${Object.keys(req.body || {}).join(',')}`);
-    res.status(500).json({ error: 'Error del servidor' });
+    logger.error(`PUT /api/admin/closings/:id: ${err.stack || err.message}`);
+    res.status(500).json({ error: 'Error del servidor — ' + (err.message || 'desconocido') });
   }
 });
 
@@ -1460,7 +1466,9 @@ app.post('/api/admin/closings/:id/confirm', authMiddleware, closingsAccessMiddle
   try {
     const { ClosingEntry } = _models(req);
     const id = String(req.params.id || '');
-    const c = await ClosingEntry.findOne({ id });
+    // Sin las urls pesadas — el confirm sólo necesita los escalares y el
+    // `kind` de los comprobantes (para el chequeo de foto del banco).
+    const c = await ClosingEntry.findOne({ id }, { 'comprobantes.url': 0, editHistory: 0 }).lean();
     if (!c) return res.status(404).json({ error: 'Cierre no encontrado' });
     if (c.status === 'confirmed') {
       return res.status(400).json({ error: 'Cierre ya estaba confirmado' });
@@ -1477,15 +1485,16 @@ app.post('/api/admin/closings/:id/confirm', authMiddleware, closingsAccessMiddle
       }
     }
     const now = new Date();
-    c.status = 'confirmed';
-    c.confirmedAt = now;
-    c.confirmedBy = req.user.username || '';
-    c.lockedAt = new Date(now.getTime() + CLOSING_LOCK_HOURS * 3600 * 1000);
-    await c.save();
-    res.json({ success: true, row: { ...c.toObject(), computed: _closingComputeTotals(c), locked: false } });
+    await ClosingEntry.updateOne({ id }, { $set: {
+      status: 'confirmed',
+      confirmedAt: now,
+      confirmedBy: req.user.username || '',
+      lockedAt: new Date(now.getTime() + CLOSING_LOCK_HOURS * 3600 * 1000)
+    } });
+    res.json({ success: true });
   } catch (err) {
-    logger.error(`POST /api/admin/closings/:id/confirm: ${err.message}`);
-    res.status(500).json({ error: 'Error del servidor' });
+    logger.error(`POST /api/admin/closings/:id/confirm: ${err.stack || err.message}`);
+    res.status(500).json({ error: 'Error del servidor — ' + (err.message || 'desconocido') });
   }
 });
 
@@ -1495,27 +1504,22 @@ app.post('/api/admin/closings/:id/verify', authMiddleware, closingsAccessMiddlew
   try {
     const { ClosingEntry } = _models(req);
     const id = String(req.params.id || '');
-    const c = await ClosingEntry.findOne({ id });
+    const c = await ClosingEntry.findOne({ id }, { id: 1, status: 1, verifiedAt: 1 }).lean();
     if (!c) return res.status(404).json({ error: 'Cierre no encontrado' });
     if (c.status !== 'confirmed') {
       return res.status(400).json({ error: 'Confirmá el cierre antes de verificarlo' });
     }
     const username = req.user.username || '';
-    if (c.verifiedAt) {
-      // toggle off
-      c.editHistory.push({ editedAt: new Date(), editedBy: username, field: 'verified', before: true, after: false });
-      c.verifiedAt = null;
-      c.verifiedBy = '';
-    } else {
-      c.verifiedAt = new Date();
-      c.verifiedBy = username;
-      c.editHistory.push({ editedAt: new Date(), editedBy: username, field: 'verified', before: false, after: true });
-    }
-    await c.save();
-    res.json({ success: true, row: { ...c.toObject(), computed: _closingComputeTotals(c), locked: _closingIsLocked(c) } });
+    const turningOn = !c.verifiedAt;
+    const hist = { editedAt: new Date(), editedBy: username, field: 'verified', before: !turningOn, after: turningOn };
+    await ClosingEntry.updateOne({ id }, {
+      $set: { verifiedAt: turningOn ? new Date() : null, verifiedBy: turningOn ? username : '' },
+      $push: { editHistory: hist }
+    });
+    res.json({ success: true, verified: turningOn });
   } catch (err) {
-    logger.error(`POST verify: ${err.message}`);
-    res.status(500).json({ error: 'Error del servidor' });
+    logger.error(`POST verify: ${err.stack || err.message}`);
+    res.status(500).json({ error: 'Error del servidor — ' + (err.message || 'desconocido') });
   }
 });
 
@@ -1525,14 +1529,15 @@ app.post('/api/admin/closings/:id/comprobante', authMiddleware, closingsAccessMi
   try {
     const { ClosingEntry } = _models(req);
     const id = String(req.params.id || '');
-    const c = await ClosingEntry.findOne({ id });
+    // Solo traemos los campos del chequeo de bloqueo — sin los comprobantes
+    // pesados — y agregamos la foto con un $push (no reescribe el doc).
+    const c = await ClosingEntry.findOne({ id }, { id: 1, status: 1, confirmedAt: 1 }).lean();
     if (!c) return res.status(404).json({ error: 'Cierre no encontrado' });
     if (_closingIsLocked(c)) {
       return res.status(403).json({ error: 'Cierre bloqueado por 24h', locked: true });
     }
     const url = String((req.body && req.body.url) || '').trim();
-    // Aceptamos http(s):// (foto en S3 o externa) o data:image/...;base64,...
-    // El fallback del cliente usa data URI cuando S3 no está configurado.
+    // Aceptamos http(s):// (foto externa) o data:image/...;base64,...
     const isHttp = /^https?:\/\//i.test(url);
     const isDataImg = /^data:image\/(jpeg|png|gif|webp);base64,/i.test(url);
     if (!url || !(isHttp || isDataImg)) {
@@ -1548,19 +1553,18 @@ app.post('/api/admin/closings/:id/comprobante', authMiddleware, closingsAccessMi
     const note = String((req.body && req.body.note) || '').trim().slice(0, 200);
     const slotRaw = req.body && req.body.teamSlot;
     const teamSlot = (Number.isInteger(slotRaw) && slotRaw >= 0 && slotRaw < BUFFALO_TEAM_SLOTS) ? slotRaw : null;
-    c.comprobantes.push({ url, kind, teamSlot, note, uploadedBy: req.user.username || '' });
-    c.editHistory.push({
-      editedAt: new Date(),
-      editedBy: req.user.username || '',
-      field: 'comprobante_add',
-      before: null,
-      after: { url, kind, teamSlot }
+    await ClosingEntry.updateOne({ id }, {
+      $push: {
+        comprobantes: { url, kind, teamSlot, note, uploadedBy: req.user.username || '', uploadedAt: new Date() },
+        // editHistory NO guarda la url — solo registra que se agregó una
+        // foto. Guardar el base64 acá duplicaba la imagen e inflaba el doc.
+        editHistory: { editedAt: new Date(), editedBy: req.user.username || '', field: 'comprobante_add', before: null, after: { kind, teamSlot } }
+      }
     });
-    await c.save();
-    res.json({ success: true, row: { ...c.toObject(), computed: _closingComputeTotals(c), locked: false } });
+    res.json({ success: true });
   } catch (err) {
-    logger.error(`POST comprobante: ${err.message}`);
-    res.status(500).json({ error: 'Error del servidor' });
+    logger.error(`POST comprobante: ${err.stack || err.message}`);
+    res.status(500).json({ error: 'Error del servidor — ' + (err.message || 'desconocido') });
   }
 });
 

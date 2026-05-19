@@ -2461,7 +2461,7 @@ async function verifyClosing(rid) {
             showToast(d.error || 'Error', 'error');
             return;
         }
-        showToast(d.row && d.row.verifiedAt ? '✓ Verificado' : 'Tilde sacado', 'success');
+        showToast(d.verified ? '✓ Verificado' : 'Tilde sacado', 'success');
         loadClosings();
     } catch (e) {
         showToast('Error', 'error');
