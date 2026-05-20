@@ -5543,10 +5543,31 @@ async function crearPublicista() {
     }
 }
 
+// Para evitar dobles guardadas en paralelo si el usuario hace doble click.
+const _pubGuardando = new Set();
+
 async function guardarPublicista(id) {
+    if (_pubGuardando.has(id)) {
+        showToast('⏳ Ya se está guardando — esperá un segundo', 'info');
+        return;
+    }
     _pubCollectAll();
     const p = _publicistasCache.find(x => x.id === id);
     if (!p) return;
+    if (!String(p.nombre || '').trim()) {
+        showToast('El nombre de la agencia no puede quedar vacío', 'error');
+        return;
+    }
+    _pubGuardando.add(id);
+    // Bloquear el botón "💾 Guardar cambios" de esta card.
+    const card = document.querySelector('[data-pub-card="' + id + '"]');
+    const btn = card && card.querySelector('button[onclick^="guardarPublicista"]');
+    const btnOriginal = btn ? btn.textContent : '';
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Guardando…'; btn.style.opacity = '0.6'; btn.style.cursor = 'wait'; }
+    // Aviso de "está tardando" si el server tarda más de 8s (Render free se duerme).
+    const tardandoMsg = setTimeout(() => {
+        showToast('⏳ Tardando más de lo normal — esperá que Render despierta…', 'info');
+    }, 8000);
     try {
         const r = await authFetch('/api/admin/publicistas/' + encodeURIComponent(id), {
             method: 'PUT', headers: { 'Content-Type': 'application/json' },
@@ -5557,12 +5578,24 @@ async function guardarPublicista(id) {
                 envios: p.envios || [], cierres: p.cierres || []
             })
         });
-        const d = await r.json();
-        if (!r.ok || !d.success) { showToast(d.error || 'Error al guardar', 'error'); return; }
+        let d = {};
+        try { d = await r.json(); } catch (_) {}
+        if (!r.ok || !d.success) {
+            const msg = d.error || ('HTTP ' + r.status + ' — el servidor rechazó el guardado');
+            showToast('❌ ' + msg, 'error');
+            console.error('[guardarPublicista]', id, r.status, d);
+            return;
+        }
         showToast('✅ Guardado', 'success');
         _renderPublicistas();
     } catch (e) {
-        showToast('Error al guardar', 'error');
+        const msg = (e && e.message) || 'sin detalle';
+        showToast('❌ Error de conexión — ' + msg + ' (revisá la conexión y volvé a guardar)', 'error');
+        console.error('[guardarPublicista] excepción', id, e);
+    } finally {
+        clearTimeout(tardandoMsg);
+        _pubGuardando.delete(id);
+        if (btn) { btn.disabled = false; btn.textContent = btnOriginal || '💾 Guardar cambios'; btn.style.opacity = ''; btn.style.cursor = ''; }
     }
 }
 
