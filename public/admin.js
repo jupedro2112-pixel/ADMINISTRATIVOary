@@ -4548,21 +4548,50 @@ async function addEmpleado() {
     }
 }
 
+const _empGuardando = new Set();
 async function saveEmpleado(id) {
+    if (_empGuardando.has(id)) {
+        showToast('⏳ Ya se está guardando — esperá un segundo', 'info');
+        return;
+    }
     const payload = _collectEmpPayload(id);
-    if (!payload) return;
+    if (!payload) { showToast('No se encontró la card del empleado', 'error'); return; }
+    if (!payload.role || !payload.role.trim()) {
+        showToast('El puesto no puede quedar vacío', 'error');
+        return;
+    }
+    _empGuardando.add(id);
+    const card = document.getElementById('emp_' + id);
+    const btn = card && card.querySelector('button[onclick^="saveEmpleado"]');
+    const btnOriginal = btn ? btn.innerHTML : '';
+    if (btn) { btn.disabled = true; btn.innerHTML = '⏳ Guardando…'; btn.style.opacity = '0.6'; btn.style.cursor = 'wait'; }
+    const tardandoMsg = setTimeout(() => {
+        showToast('⏳ Tardando más de lo normal — esperá que Render despierta…', 'info');
+    }, 8000);
     try {
         const r = await authFetch('/api/admin/empleados/' + encodeURIComponent(id), {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
         });
-        const d = await r.json();
-        if (!r.ok || !d.success) { showToast(d.error || 'Error al guardar', 'error'); return; }
+        let d = {};
+        try { d = await r.json(); } catch (_) {}
+        if (!r.ok || !d.success) {
+            const msg = d.error || ('HTTP ' + r.status + ' — el servidor rechazó el guardado');
+            showToast('❌ ' + msg, 'error');
+            console.error('[saveEmpleado]', id, r.status, d, payload);
+            return;
+        }
         showToast('💾 Guardado', 'success');
         loadEmpleados();
     } catch (e) {
-        showToast('Error de conexión', 'error');
+        const msg = (e && e.message) || 'sin detalle';
+        showToast('❌ Error de conexión — ' + msg, 'error');
+        console.error('[saveEmpleado] excepción', id, e, payload);
+    } finally {
+        clearTimeout(tardandoMsg);
+        _empGuardando.delete(id);
+        if (btn) { btn.disabled = false; btn.innerHTML = btnOriginal || '💾 Guardar'; btn.style.opacity = ''; btn.style.cursor = ''; }
     }
 }
 
