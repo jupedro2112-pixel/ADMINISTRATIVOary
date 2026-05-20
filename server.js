@@ -2305,6 +2305,7 @@ const EmployeeEntry = require('./src/models/EmployeeEntry');
 const EmployeeSectorConfig = require('./src/models/EmployeeSectorConfig');
 const EmployeeClosing = require('./src/models/EmployeeClosing');
 const Publicista = require('./src/models/Publicista');
+const GastoFijo = require('./src/models/GastoFijo');
 const EMP_DELETE_PIN = '1818';
 const EMP_SECTORS = ['ganamos', 'publicidad', 'buffalo'];
 const EMP_DIAS_MES = 30;
@@ -2327,8 +2328,9 @@ const EmployeeEntryCrazy          = _crazyModel(EmployeeEntry, 'EmployeeEntryCra
 const EmployeeSectorConfigCrazy   = _crazyModel(EmployeeSectorConfig, 'EmployeeSectorConfigCrazy', 'employeesectorconfigs_crazy');
 const EmployeeClosingCrazy        = _crazyModel(EmployeeClosing, 'EmployeeClosingCrazy', 'employeeclosings_crazy');
 const PublicistaCrazy             = _crazyModel(Publicista, 'PublicistaCrazy', 'publicistas_crazy');
+const GastoFijoCrazy              = _crazyModel(GastoFijo, 'GastoFijoCrazy', 'gastosfijos_crazy');
 
-const _MODELS_MAIN = { ClosingEntry, CotizacionEntry, CotizacionExternaEntry, EmployeeEntry, EmployeeSectorConfig, EmployeeClosing, Publicista };
+const _MODELS_MAIN = { ClosingEntry, CotizacionEntry, CotizacionExternaEntry, EmployeeEntry, EmployeeSectorConfig, EmployeeClosing, Publicista, GastoFijo };
 const _MODELS_CRAZY = {
   ClosingEntry: ClosingEntryCrazy,
   CotizacionEntry: CotizacionEntryCrazy,
@@ -2336,7 +2338,8 @@ const _MODELS_CRAZY = {
   EmployeeEntry: EmployeeEntryCrazy,
   EmployeeSectorConfig: EmployeeSectorConfigCrazy,
   EmployeeClosing: EmployeeClosingCrazy,
-  Publicista: PublicistaCrazy
+  Publicista: PublicistaCrazy,
+  GastoFijo: GastoFijoCrazy
 };
 
 // Tenant del request: 'crazy' para el login crazy, 'main' para el resto.
@@ -2768,6 +2771,129 @@ app.delete('/api/admin/empleados/:id', authMiddleware, closingsAccessMiddleware,
     res.status(500).json({ error: 'Error del servidor' });
   }
 });
+
+// ============================================
+// GASTOS FIJOS MENSUALES — luz, agua, alquileres, comisiones, etc.
+// ============================================
+// Cada gasto se carga en su propia moneda (pesos o USDT con cotización).
+// Se agrupan opcionalmente por "estructura" (lista fija de 3 nombres
+// editable, guardada en Config key `gastos_fijos_estructuras`).
+const GASTO_FIJO_DELETE_PIN = '1818';
+const _GASTOS_FIJOS_ESTRUCTURAS_KEY = () => 'gastos_fijos_estructuras'; // por tenant via _models
+const _GASTOS_FIJOS_DEFAULT_ESTRUCTURAS = ['Estructura 1', 'Estructura 2', 'Estructura 3'];
+
+function _gastoFijoEstructurasKey(req) {
+  return _tenantOf(req) === 'crazy' ? 'gastos_fijos_estructuras__crazy' : 'gastos_fijos_estructuras';
+}
+async function _getGastoFijoEstructuras(req) {
+  const v = await getConfig(_gastoFijoEstructurasKey(req), null);
+  if (!Array.isArray(v) || v.length === 0) return _GASTOS_FIJOS_DEFAULT_ESTRUCTURAS.slice();
+  const arr = v.map(x => String(x || '').trim()).slice(0, 3);
+  while (arr.length < 3) arr.push(_GASTOS_FIJOS_DEFAULT_ESTRUCTURAS[arr.length]);
+  return arr;
+}
+
+// GET — lista todos los gastos fijos + los nombres de las 3 estructuras.
+app.get('/api/admin/gastos-fijos', authMiddleware, closingsAccessMiddleware, async (req, res) => {
+  try {
+    const { GastoFijo } = _models(req);
+    const items = await GastoFijo.find({}).sort({ active: -1, concepto: 1 }).lean();
+    res.json({ success: true, items, estructuras: await _getGastoFijoEstructuras(req) });
+  } catch (err) {
+    logger.error(`GET /api/admin/gastos-fijos: ${err.stack || err.message}`);
+    res.status(500).json({ error: 'Error del servidor — ' + (err.message || 'desconocido') });
+  }
+});
+
+// PUT — guarda los nombres de las 3 estructuras.
+app.put('/api/admin/gastos-fijos/estructuras', authMiddleware, closingsAccessMiddleware, async (req, res) => {
+  try {
+    const raw = (req.body && req.body.estructuras);
+    if (!Array.isArray(raw)) return res.status(400).json({ error: 'estructuras debe ser una lista' });
+    const arr = raw.slice(0, 3).map(x => String(x || '').trim().slice(0, 60));
+    while (arr.length < 3) arr.push(_GASTOS_FIJOS_DEFAULT_ESTRUCTURAS[arr.length]);
+    await setConfig(_gastoFijoEstructurasKey(req), arr);
+    res.json({ success: true, estructuras: arr });
+  } catch (err) {
+    logger.error(`PUT /api/admin/gastos-fijos/estructuras: ${err.stack || err.message}`);
+    res.status(500).json({ error: 'Error del servidor — ' + (err.message || 'desconocido') });
+  }
+});
+
+// POST — crear gasto fijo nuevo.
+app.post('/api/admin/gastos-fijos', authMiddleware, closingsAccessMiddleware, async (req, res) => {
+  try {
+    const { GastoFijo } = _models(req);
+    const b = req.body || {};
+    const concepto = String(b.concepto || '').trim().slice(0, 100);
+    if (!concepto) return res.status(400).json({ error: 'El concepto no puede quedar vacío' });
+    const doc = await GastoFijo.create({
+      id: `gf_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      concepto,
+      moneda: (b.moneda === 'usdt') ? 'usdt' : 'pesos',
+      monto: Math.max(0, Number(b.monto) || 0),
+      usdtRate: Math.max(0, Number(b.usdtRate) || 0),
+      estructuraIdx: _normEstructuraIdx(b.estructuraIdx),
+      nota: String(b.nota || '').trim().slice(0, 200),
+      active: true,
+      createdBy: (req.user && req.user.username) || ''
+    });
+    res.json({ success: true, item: doc.toObject() });
+  } catch (err) {
+    logger.error(`POST /api/admin/gastos-fijos: ${err.stack || err.message}`);
+    res.status(500).json({ error: 'Error del servidor — ' + (err.message || 'desconocido') });
+  }
+});
+
+// PUT — actualizar gasto fijo.
+app.put('/api/admin/gastos-fijos/:id', authMiddleware, closingsAccessMiddleware, async (req, res) => {
+  try {
+    const { GastoFijo } = _models(req);
+    const id = String(req.params.id || '');
+    const b = req.body || {};
+    const set = {};
+    if (b.concepto !== undefined) {
+      const concepto = String(b.concepto || '').trim().slice(0, 100);
+      if (!concepto) return res.status(400).json({ error: 'El concepto no puede quedar vacío' });
+      set.concepto = concepto;
+    }
+    if (b.moneda !== undefined) set.moneda = (b.moneda === 'usdt') ? 'usdt' : 'pesos';
+    if (b.monto !== undefined) set.monto = Math.max(0, Number(b.monto) || 0);
+    if (b.usdtRate !== undefined) set.usdtRate = Math.max(0, Number(b.usdtRate) || 0);
+    if (b.estructuraIdx !== undefined) set.estructuraIdx = _normEstructuraIdx(b.estructuraIdx);
+    if (b.nota !== undefined) set.nota = String(b.nota || '').trim().slice(0, 200);
+    if (b.active !== undefined) set.active = !!b.active;
+    if (Object.keys(set).length === 0) return res.json({ success: true });
+    const r = await GastoFijo.updateOne({ id }, { $set: set });
+    if (!r.matchedCount) return res.status(404).json({ error: 'Gasto no encontrado' });
+    res.json({ success: true });
+  } catch (err) {
+    logger.error(`PUT /api/admin/gastos-fijos/:id: ${err.stack || err.message}`);
+    res.status(500).json({ error: 'Error del servidor — ' + (err.message || 'desconocido') });
+  }
+});
+
+// DELETE — borrar gasto fijo (requiere PIN 1818).
+app.delete('/api/admin/gastos-fijos/:id', authMiddleware, closingsAccessMiddleware, async (req, res) => {
+  try {
+    const { GastoFijo } = _models(req);
+    const id = String(req.params.id || '');
+    const pin = String((req.query && req.query.pin) || (req.body && req.body.pin) || '');
+    if (pin !== GASTO_FIJO_DELETE_PIN) return res.status(403).json({ error: 'PIN incorrecto' });
+    const r = await GastoFijo.deleteOne({ id });
+    if (!r.deletedCount) return res.status(404).json({ error: 'Gasto no encontrado' });
+    res.json({ success: true });
+  } catch (err) {
+    logger.error(`DELETE /api/admin/gastos-fijos/:id: ${err.stack || err.message}`);
+    res.status(500).json({ error: 'Error del servidor — ' + (err.message || 'desconocido') });
+  }
+});
+
+function _normEstructuraIdx(v) {
+  const n = Math.round(Number(v));
+  if (!Number.isFinite(n) || n < -1 || n > 2) return -1;
+  return n;
+}
 
 // ============================================
 // PUBLICIDAD — publicistas, envíos de plata y cierres diarios

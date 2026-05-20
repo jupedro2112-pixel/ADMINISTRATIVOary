@@ -468,6 +468,7 @@ function showSection(sectionKey) {
         loadHistorialCotizacion();
     } else if (sectionKey === 'empleados') {
         loadEmpleados();
+        loadGastosFijos();
     } else if (sectionKey === 'publicidad') {
         loadPublicistas();
     }
@@ -4812,6 +4813,259 @@ async function deleteEmpleado(id) {
     } catch (e) {
         showToast('Error de conexión', 'error');
     }
+}
+
+// ============================================================
+// GASTOS FIJOS MENSUALES — luz, agua, alquileres, comisiones
+// ============================================================
+// Cada gasto se carga en su moneda (pesos o USDT con cotización). Los
+// totales se convierten a ARS sumando todos. Las 3 estructuras son una
+// lista fija editable (Config key `gastos_fijos_estructuras`).
+let _gastosFijosCache = [];
+let _gastoEstructuras = ['Estructura 1', 'Estructura 2', 'Estructura 3'];
+const _gfInp = 'background:rgba(0,0,0,0.45);border:1px solid rgba(255,255,255,0.14);color:#fff;padding:5px 7px;border-radius:5px;font-size:11.5px;box-sizing:border-box;width:100%;';
+const _gfSel = 'background:rgba(0,0,0,0.55);border:1px solid rgba(255,255,255,0.18);color:#fff;padding:5px 7px;border-radius:5px;font-size:11.5px;box-sizing:border-box;';
+
+function _gfFmt(n) { return '$' + Math.round(Number(n) || 0).toLocaleString('es-AR'); }
+function _gfMon(moneda, n) {
+    n = Number(n) || 0;
+    return (moneda === 'usdt')
+        ? 'U$D ' + n.toLocaleString('es-AR', { maximumFractionDigits: 2 })
+        : '$' + Math.round(n).toLocaleString('es-AR');
+}
+// Convierte un gasto a ARS según su moneda y usdtRate.
+function _gfToARS(g) {
+    const m = Number(g.monto) || 0;
+    if (g.moneda === 'usdt') return m * (Number(g.usdtRate) || 0);
+    return m;
+}
+
+async function loadGastosFijos() {
+    const body = document.getElementById('gastosFijosBody');
+    if (!body) return;
+    body.innerHTML = '<div style="color:#aaa;text-align:center;padding:16px;">⏳ Cargando gastos fijos…</div>';
+    try {
+        const r = await authFetch('/api/admin/gastos-fijos');
+        const d = await r.json();
+        if (!r.ok || !d.success) {
+            body.innerHTML = '<div style="color:#ff8080;padding:14px;">❌ ' + escapeHtml(d.error || 'Error') + '</div>';
+            return;
+        }
+        _gastosFijosCache = d.items || [];
+        if (Array.isArray(d.estructuras) && d.estructuras.length === 3) _gastoEstructuras = d.estructuras;
+        _renderGastosFijos();
+    } catch (e) {
+        body.innerHTML = '<div style="color:#ff8080;padding:14px;">Error: ' + escapeHtml(e.message || '') + '</div>';
+    }
+}
+
+function _renderGastosFijos() {
+    const body = document.getElementById('gastosFijosBody');
+    if (!body) return;
+    const items = _gastosFijosCache.filter(g => g.active !== false);
+    // Totales en ARS.
+    const totalARS = items.reduce((s, g) => s + _gfToARS(g), 0);
+    const porEstructura = [0, 0, 0];
+    let sinEstructura = 0;
+    for (const g of items) {
+        const ars = _gfToARS(g);
+        const idx = Number(g.estructuraIdx);
+        if (idx >= 0 && idx <= 2) porEstructura[idx] += ars;
+        else sinEstructura += ars;
+    }
+
+    let h = '<div style="background:rgba(155,48,255,0.05);border:1.5px solid rgba(155,48,255,0.40);border-radius:12px;padding:14px;">';
+    h += '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:10px;">';
+    h += '<span style="color:#c89bff;font-weight:900;font-size:14px;letter-spacing:0.5px;">💸 GASTOS FIJOS MENSUALES</span>';
+    h += '<div style="display:flex;gap:6px;flex-wrap:wrap;">';
+    h += '<button type="button" onclick="_gfEditEstructurasModal()" style="background:rgba(155,48,255,0.10);color:#c89bff;border:1px solid rgba(155,48,255,0.40);padding:5px 11px;border-radius:6px;font-weight:800;font-size:11px;cursor:pointer;">✏️ Nombres de estructuras</button>';
+    h += '<button type="button" onclick="addGastoFijo()" style="background:linear-gradient(135deg,#9b30ff,#c89bff);color:#000;border:none;padding:5px 14px;border-radius:6px;font-weight:900;font-size:11px;cursor:pointer;">➕ Agregar gasto</button>';
+    h += '</div></div>';
+
+    if (items.length === 0) {
+        h += '<div style="color:#888;text-align:center;padding:18px;font-size:12px;">Sin gastos fijos cargados. Agregá el primero arriba.</div>';
+    } else {
+        const cols = '1.4fr 90px 110px 110px 1fr 1.2fr 30px';
+        h += '<div style="overflow-x:auto;"><div style="min-width:780px;">';
+        h += '<div style="display:grid;grid-template-columns:' + cols + ';gap:6px;font-size:9px;color:#888;text-transform:uppercase;font-weight:700;margin-bottom:6px;padding:0 2px;">';
+        h += '<div>Concepto</div><div>Moneda</div><div>Monto</div><div title="ARS por 1 USDT — solo si USDT">USDT (ARS)</div><div>Estructura</div><div>Nota</div><div></div></div>';
+        for (const g of items) {
+            const gid = escapeHtml(g.id);
+            const esUsdt = g.moneda === 'usdt';
+            const arsEq = _gfToARS(g);
+            h += '<div data-gf-row="' + gid + '" style="display:grid;grid-template-columns:' + cols + ';gap:6px;margin-bottom:5px;align-items:center;">';
+            h += '<input data-gf-field="concepto" type="text" maxlength="100" value="' + escapeHtml(g.concepto || '') + '" placeholder="ej: Luz, Alquiler local 1" style="' + _gfInp + '">';
+            h += '<select data-gf-field="moneda" onchange="_gfRowChanged(\'' + gid + '\')" style="' + _gfSel + 'width:100%;">';
+            h += '<option value="pesos"' + (!esUsdt ? ' selected' : '') + '>Pesos</option>';
+            h += '<option value="usdt"' + (esUsdt ? ' selected' : '') + '>USDT</option>';
+            h += '</select>';
+            h += '<input data-gf-field="monto" type="number" min="0" step="1" value="' + (Number(g.monto) || 0) + '" oninput="_gfRowChanged(\'' + gid + '\')" style="' + _gfInp + '">';
+            if (esUsdt) {
+                h += '<input data-gf-field="usdtRate" type="number" min="0" step="1" value="' + (Number(g.usdtRate) || 0) + '" oninput="_gfRowChanged(\'' + gid + '\')" placeholder="ej: 1200" style="' + _gfInp + '">';
+            } else {
+                h += '<div style="color:#666;font-size:10px;text-align:center;">—</div>';
+            }
+            h += '<select data-gf-field="estructuraIdx" style="' + _gfSel + 'width:100%;">';
+            h += '<option value="-1"' + (Number(g.estructuraIdx) === -1 || g.estructuraIdx == null ? ' selected' : '') + '>— sin estructura —</option>';
+            for (let i = 0; i < 3; i++) {
+                h += '<option value="' + i + '"' + (Number(g.estructuraIdx) === i ? ' selected' : '') + '>' + escapeHtml(_gastoEstructuras[i] || ('Estructura ' + (i + 1))) + '</option>';
+            }
+            h += '</select>';
+            h += '<input data-gf-field="nota" type="text" maxlength="200" value="' + escapeHtml(g.nota || '') + '" placeholder="ej: U$D 200 al cambio" style="' + _gfInp + '">';
+            h += '<button type="button" onclick="delGastoFijo(\'' + gid + '\')" title="Borrar (PIN 1818)" style="background:rgba(255,80,80,0.10);color:#f55;border:1px solid rgba(255,80,80,0.30);border-radius:5px;cursor:pointer;font-size:11px;padding:4px;">✕</button>';
+            h += '<div style="grid-column:1/-1;display:flex;justify-content:flex-end;font-size:9.5px;color:#888;padding-right:42px;">' + (esUsdt ? '≈ ' + _gfFmt(arsEq) + ' ARS' : '') + '</div>';
+            h += '</div>';
+        }
+        h += '</div></div>';
+
+        // Botones de acción + totales.
+        h += '<div style="display:flex;justify-content:space-between;align-items:end;flex-wrap:wrap;gap:12px;margin-top:14px;border-top:1px solid rgba(255,255,255,0.10);padding-top:12px;">';
+        h += '<div>';
+        h += '<button type="button" onclick="guardarGastosFijos()" style="background:rgba(102,255,102,0.15);border:1px solid rgba(102,255,102,0.45);color:#aaffaa;padding:7px 18px;border-radius:8px;font-weight:900;font-size:12px;cursor:pointer;">💾 Guardar cambios</button>';
+        h += '</div>';
+        h += '<div style="font-size:11px;text-align:right;">';
+        h += '<div style="color:#c89bff;font-weight:900;font-size:14px;margin-bottom:4px;">Total mensual: ' + _gfFmt(totalARS) + '</div>';
+        for (let i = 0; i < 3; i++) {
+            if (porEstructura[i] > 0) {
+                h += '<div style="color:#aaa;">' + escapeHtml(_gastoEstructuras[i]) + ': <span style="color:#fff;font-weight:800;">' + _gfFmt(porEstructura[i]) + '</span></div>';
+            }
+        }
+        if (sinEstructura > 0) {
+            h += '<div style="color:#aaa;">Sin estructura: <span style="color:#fff;font-weight:800;">' + _gfFmt(sinEstructura) + '</span></div>';
+        }
+        h += '</div></div>';
+    }
+    h += '</div>';
+    body.innerHTML = h;
+}
+
+// Cuando cambia la moneda o el monto/rate: leemos al cache y re-render para
+// mostrar/ocultar el input de cotización y refrescar totales.
+function _gfRowChanged(id) {
+    _gfCollectAll();
+    _renderGastosFijos();
+}
+
+function _gfCollectAll() {
+    for (const g of _gastosFijosCache) {
+        const row = document.querySelector('[data-gf-row="' + g.id + '"]');
+        if (!row) continue;
+        const get = (f) => { const el = row.querySelector('[data-gf-field="' + f + '"]'); return el ? el.value : undefined; };
+        const concepto = get('concepto'); if (concepto !== undefined) g.concepto = concepto;
+        const moneda = get('moneda'); if (moneda !== undefined) g.moneda = (moneda === 'usdt') ? 'usdt' : 'pesos';
+        const monto = get('monto'); if (monto !== undefined) g.monto = Number(monto) || 0;
+        const usdtRate = get('usdtRate'); if (usdtRate !== undefined) g.usdtRate = Number(usdtRate) || 0;
+        const estIdx = get('estructuraIdx'); if (estIdx !== undefined) g.estructuraIdx = Number(estIdx);
+        const nota = get('nota'); if (nota !== undefined) g.nota = nota;
+    }
+}
+
+async function addGastoFijo() {
+    const concepto = ((prompt('Concepto del gasto (ej: Luz, Alquiler local 1):') || '').trim()).slice(0, 100);
+    if (!concepto) return;
+    try {
+        const r = await authFetch('/api/admin/gastos-fijos', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ concepto })
+        });
+        const d = await r.json();
+        if (!r.ok || !d.success) { showToast(d.error || 'Error', 'error'); return; }
+        showToast('✅ Gasto agregado', 'success');
+        _gfCollectAll();
+        if (d.item) _gastosFijosCache.push(d.item);
+        _renderGastosFijos();
+    } catch (e) { showToast('Error de conexión', 'error'); }
+}
+
+async function delGastoFijo(id) {
+    const g = _gastosFijosCache.find(x => x.id === id);
+    if (!confirm('¿Borrar el gasto "' + ((g && g.concepto) || '') + '"?')) return;
+    const pin = prompt('PIN para borrar:');
+    if (pin == null) return;
+    if (!pin) { showToast('PIN requerido', 'error'); return; }
+    try {
+        const r = await authFetch('/api/admin/gastos-fijos/' + encodeURIComponent(id) + '?pin=' + encodeURIComponent(pin), { method: 'DELETE' });
+        const d = await r.json();
+        if (!r.ok || !d.success) { showToast(d.error || 'Error', 'error'); return; }
+        showToast('🗑 Gasto borrado', 'success');
+        _gfCollectAll();
+        _gastosFijosCache = _gastosFijosCache.filter(x => x.id !== id);
+        _renderGastosFijos();
+    } catch (e) { showToast('Error de conexión', 'error'); }
+}
+
+// Guarda TODOS los gastos editados en paralelo (un PUT por gasto que tenga
+// data en el DOM). El backend hace updateOne — es rápido.
+const _gfGuardando = { running: false };
+async function guardarGastosFijos() {
+    if (_gfGuardando.running) { showToast('⏳ Ya se está guardando', 'info'); return; }
+    _gfCollectAll();
+    _gfGuardando.running = true;
+    try {
+        const results = await Promise.all(_gastosFijosCache.map(async (g) => {
+            if (!String(g.concepto || '').trim()) return { ok: false, concepto: g.concepto, err: 'Concepto vacío' };
+            try {
+                const r = await authFetch('/api/admin/gastos-fijos/' + encodeURIComponent(g.id), {
+                    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        concepto: g.concepto, moneda: g.moneda || 'pesos',
+                        monto: g.monto || 0, usdtRate: g.usdtRate || 0,
+                        estructuraIdx: g.estructuraIdx, nota: g.nota || ''
+                    })
+                });
+                const d = await r.json().catch(() => ({}));
+                return r.ok && d.success ? { ok: true } : { ok: false, concepto: g.concepto, err: d.error || ('HTTP ' + r.status) };
+            } catch (e) { return { ok: false, concepto: g.concepto, err: e.message || 'red' }; }
+        }));
+        const fallidos = results.filter(x => !x.ok);
+        if (fallidos.length === 0) {
+            showToast('✅ Gastos guardados', 'success');
+        } else {
+            showToast('❌ ' + fallidos.length + ' gasto(s) fallaron: ' + fallidos.map(f => f.concepto + ' (' + f.err + ')').join('; '), 'error');
+        }
+    } finally {
+        _gfGuardando.running = false;
+    }
+}
+
+// Modal para renombrar las 3 estructuras.
+function _gfEditEstructurasModal() {
+    document.getElementById('gfEstructurasModal')?.remove();
+    const modal = document.createElement('div');
+    modal.id = 'gfEstructurasModal';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:10000;display:flex;align-items:center;justify-content:center;';
+    let h = '<div style="background:#1a1024;border:1.5px solid rgba(155,48,255,0.50);border-radius:12px;padding:22px;max-width:420px;width:90%;">';
+    h += '<h3 style="color:#c89bff;margin:0 0 14px 0;font-size:15px;">✏️ Nombres de las 3 estructuras</h3>';
+    for (let i = 0; i < 3; i++) {
+        h += '<div style="margin-bottom:10px;"><label style="display:block;color:#aaa;font-size:10px;text-transform:uppercase;font-weight:700;margin-bottom:3px;">Estructura ' + (i + 1) + '</label>';
+        h += '<input id="gfEstrInp_' + i + '" type="text" maxlength="60" value="' + escapeHtml(_gastoEstructuras[i] || '') + '" style="' + _gfInp + '"></div>';
+    }
+    h += '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px;">';
+    h += '<button onclick="document.getElementById(\'gfEstructurasModal\').remove()" style="background:rgba(255,255,255,0.07);color:#ddd;border:1px solid rgba(255,255,255,0.18);padding:7px 14px;border-radius:6px;font-weight:700;font-size:12px;cursor:pointer;">Cancelar</button>';
+    h += '<button onclick="_gfSaveEstructuras()" style="background:linear-gradient(135deg,#9b30ff,#c89bff);color:#000;border:none;padding:7px 18px;border-radius:6px;font-weight:900;font-size:12px;cursor:pointer;">Guardar</button>';
+    h += '</div></div>';
+    modal.innerHTML = h;
+    document.body.appendChild(modal);
+}
+
+async function _gfSaveEstructuras() {
+    const estructuras = [];
+    for (let i = 0; i < 3; i++) {
+        const el = document.getElementById('gfEstrInp_' + i);
+        estructuras.push(((el && el.value) || '').trim().slice(0, 60) || ('Estructura ' + (i + 1)));
+    }
+    try {
+        const r = await authFetch('/api/admin/gastos-fijos/estructuras', {
+            method: 'PUT', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ estructuras })
+        });
+        const d = await r.json();
+        if (!r.ok || !d.success) { showToast(d.error || 'Error', 'error'); return; }
+        _gastoEstructuras = d.estructuras || estructuras;
+        document.getElementById('gfEstructurasModal')?.remove();
+        showToast('✅ Estructuras actualizadas', 'success');
+        _renderGastosFijos();
+    } catch (e) { showToast('Error de conexión', 'error'); }
 }
 
 // ============================================================
