@@ -446,7 +446,8 @@ function showSection(sectionKey) {
         historialCotizacion: 'historialCotizacionSection',
         empleados: 'empleadosSection',
         publicidad: 'publicidadSection',
-        gastosFijos: 'gastosFijosSection'
+        gastosFijos: 'gastosFijosSection',
+        gastosInternos: 'gastosInternosSection'
     };
     const sectionId = map[sectionKey];
     if (sectionId) {
