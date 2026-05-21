@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#1a0033">
     <meta name="robots" content="noindex, nofollow, noarchive">
     <title>Central Control</title>
-    <link rel="stylesheet" href="/admin.css?v=20260521b">
+    <link rel="stylesheet" href="/admin.css?v=20260521c">
     <link rel="manifest" href="/manifest.json">
     <style>
         /* Modo "vista reducida" — activo cuando la URL trae ?only=<seccion>.
@@ -109,6 +109,10 @@
                 <a href="#" class="nav-item" data-section="publicidad" data-protected-pin="publicidad" style="background:rgba(255,128,0,0.10);border-left:3px solid #ff8000;">
                     <span>📣</span>
                     <span><strong>PUBLICIDAD</strong></span>
+                </a>
+                <a href="#" class="nav-item" data-section="gastosFijos" data-protected-pin="publicidad" style="background:rgba(155,48,255,0.10);border-left:3px solid #c89bff;">
+                    <span>💸</span>
+                    <span><strong>GASTOS FIJOS</strong></span>
                 </a>
             </nav>
             <div class="sidebar-footer">
@@ -278,10 +282,26 @@
                 <div id="publicidadBody">
                     <div style="color:#aaa;text-align:center;padding:24px;">⏳ Cargando…</div>
                 </div>
+            </section>
 
-                <!-- Gastos fijos mensuales — luz, agua, alquileres, comisiones -->
-                <div id="gastosFijosBody" style="margin-top:24px;">
-                    <div style="color:#aaa;text-align:center;padding:16px;background:rgba(155,48,255,0.05);border:1.5px dashed rgba(155,48,255,0.40);border-radius:10px;">⏳ Cargando gastos fijos mensuales…</div>
+            <!-- ============================================
+                 SECCIÓN: GASTOS FIJOS MENSUALES
+                 Luz, agua, alquileres, comisiones — multi-moneda y 3 estructuras.
+                 ============================================ -->
+            <section id="gastosFijosSection" class="section">
+                <div class="panel-header">
+                    <h2>💸 Gastos fijos</h2>
+                    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                        <button class="refresh-btn" onclick="loadGastosFijos()" title="Actualizar">🔄</button>
+                    </div>
+                </div>
+                <div style="background:rgba(155,48,255,0.06);border-left:3px solid #c89bff;padding:10px 12px;margin-bottom:14px;border-radius:6px;">
+                    <p style="margin:0;color:#bbb;font-size:11.5px;line-height:1.55;">
+                        Gastos fijos mensuales — luz, agua, alquileres, comisiones, etc. Cada gasto se carga en su moneda (pesos o USDT con cotización). Las <strong>3 estructuras</strong> se renombran una vez y después cada gasto se asigna a la que corresponda; el total se desglosa por estructura.
+                    </p>
+                </div>
+                <div id="gastosFijosBody">
+                    <div style="color:#aaa;text-align:center;padding:24px;">⏳ Cargando…</div>
                 </div>
             </section>
 
@@ -416,6 +436,6 @@
 
     <!-- SheetJS para parsear .xlsx en el navegador (recontactación) -->
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-    <script src="/admin.js?v=20260521b"></script>
+    <script src="/admin.js?v=20260521c"></script>
 </body>
 </html>

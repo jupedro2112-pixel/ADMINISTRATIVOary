@@ -238,7 +238,7 @@ function showApp() {
 
     // Publicidad: solo para el login principal (ignite1000). Para `crazy` la ocultamos.
     if (currentAdmin && currentAdmin.username === 'crazy') {
-        document.querySelectorAll('.nav-item[data-section="publicidad"]').forEach((el) => { el.style.display = 'none'; });
+        document.querySelectorAll('.nav-item[data-section="publicidad"],.nav-item[data-section="gastosFijos"]').forEach((el) => { el.style.display = 'none'; });
     }
 
     // Arranca el polling del badge "users activos" al lado del adminName.
@@ -421,7 +421,7 @@ function _changeSectionPin(sectionKey, sectionLabel) {
 // ============================================
 function showSection(sectionKey) {
     // Publicidad: bloqueada para `crazy` aunque fuerce la navegación.
-    if (sectionKey === 'publicidad' && currentAdmin && currentAdmin.username === 'crazy') {
+    if ((sectionKey === 'publicidad' || sectionKey === 'gastosFijos') && currentAdmin && currentAdmin.username === 'crazy') {
         return;
     }
     // Pin gate: si la sección está protegida y no está desbloqueada, pedir PIN.
@@ -445,7 +445,8 @@ function showSection(sectionKey) {
         historialBuffalo: 'historialBuffaloSection',
         historialCotizacion: 'historialCotizacionSection',
         empleados: 'empleadosSection',
-        publicidad: 'publicidadSection'
+        publicidad: 'publicidadSection',
+        gastosFijos: 'gastosFijosSection'
     };
     const sectionId = map[sectionKey];
     if (sectionId) {
@@ -470,6 +471,7 @@ function showSection(sectionKey) {
         loadEmpleados();
     } else if (sectionKey === 'publicidad') {
         loadPublicistas();
+    } else if (sectionKey === 'gastosFijos') {
         loadGastosFijos();
     }
 }
