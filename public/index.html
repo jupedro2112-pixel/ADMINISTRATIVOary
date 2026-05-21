@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#1a0033">
     <meta name="robots" content="noindex, nofollow, noarchive">
     <title>Central Control</title>
-    <link rel="stylesheet" href="/admin.css?v=20260521c">
+    <link rel="stylesheet" href="/admin.css?v=20260521d">
     <link rel="manifest" href="/manifest.json">
     <style>
         /* Modo "vista reducida" — activo cuando la URL trae ?only=<seccion>.
@@ -113,6 +113,10 @@
                 <a href="#" class="nav-item" data-section="gastosFijos" data-protected-pin="publicidad" style="background:rgba(155,48,255,0.10);border-left:3px solid #c89bff;">
                     <span>💸</span>
                     <span><strong>GASTOS FIJOS</strong></span>
+                </a>
+                <a href="#" class="nav-item" data-section="gastosInternos" data-protected-pin="gastosInternos" style="background:rgba(255,212,121,0.10);border-left:3px solid #ffd479;">
+                    <span>🏛️</span>
+                    <span><strong>GASTOS INTERNO</strong></span>
                 </a>
             </nav>
             <div class="sidebar-footer">
@@ -305,6 +309,27 @@
                 </div>
             </section>
 
+            <!-- ============================================
+                 SECCIÓN: GASTOS INTERNOS
+                 Igual que GASTOS FIJOS pero categoría aparte, PIN 100.
+                 ============================================ -->
+            <section id="gastosInternosSection" class="section">
+                <div class="panel-header">
+                    <h2>🏛️ Gastos interno</h2>
+                    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                        <button class="refresh-btn" onclick="loadGastosInternos()" title="Actualizar">🔄</button>
+                    </div>
+                </div>
+                <div style="background:rgba(255,212,121,0.07);border-left:3px solid #ffd479;padding:10px 12px;margin-bottom:14px;border-radius:6px;">
+                    <p style="margin:0;color:#bbb;font-size:11.5px;line-height:1.55;">
+                        Gastos internos mensuales (categoría aparte de gastos fijos). Mismo formato: concepto, moneda (pesos o USDT con cotización), 3 estructuras renombrables. Total se desglosa por estructura. Acceso protegido con PIN propio.
+                    </p>
+                </div>
+                <div id="gastosInternosBody">
+                    <div style="color:#aaa;text-align:center;padding:24px;">⏳ Cargando…</div>
+                </div>
+            </section>
+
         </main>
     </div>
 
@@ -436,6 +461,6 @@
 
     <!-- SheetJS para parsear .xlsx en el navegador (recontactación) -->
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-    <script src="/admin.js?v=20260521c"></script>
+    <script src="/admin.js?v=20260521d"></script>
 </body>
 </html>

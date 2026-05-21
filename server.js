@@ -857,7 +857,7 @@ const _DEFAULT_SECTION_PIN = '1818';
 // Defaults específicos por sección — overridean _DEFAULT_SECTION_PIN.
 // Útil para que distintas secciones empiecen con PIN distinto sin que el
 // admin tenga que ir a cambiarlos a mano.
-const _SECTION_DEFAULT_PINS = { closings: '3333', empleados: '2020', publicidad: '505050' };
+const _SECTION_DEFAULT_PINS = { closings: '3333', empleados: '2020', publicidad: '505050', gastosInternos: '100' };
 // PINs previos seedeados por defecto en deploys anteriores. Si el valor en
 // la DB todavía es uno de estos, se rotará al default nuevo en el próximo
 // _getSectionPins(). Si el owner ya cambió la clave a otro valor distinto,
@@ -874,7 +874,7 @@ const _defaultPinForSection = (s) => _SECTION_DEFAULT_PINS[s] || _DEFAULT_SECTIO
 // frontend-gate: los endpoints /api/admin/closings* NO requieren el token
 // de section-pin porque también los usa el rol closings_viewer que no es
 // full admin y no puede llamar a /section-pins/verify).
-const _PROTECTED_SECTIONS = ['closings', 'empleados', 'publicidad'];
+const _PROTECTED_SECTIONS = ['closings', 'empleados', 'publicidad', 'gastosInternos'];
 
 async function _getSectionPins() {
   let v = await getConfig('admin_section_pins', null);
@@ -2306,6 +2306,7 @@ const EmployeeSectorConfig = require('./src/models/EmployeeSectorConfig');
 const EmployeeClosing = require('./src/models/EmployeeClosing');
 const Publicista = require('./src/models/Publicista');
 const GastoFijo = require('./src/models/GastoFijo');
+const GastoInterno = require('./src/models/GastoInterno');
 const EMP_DELETE_PIN = '1818';
 const EMP_SECTORS = ['ganamos', 'publicidad', 'buffalo'];
 const EMP_FRANCO_DAYS = ['lunes', 'martes', 'miercoles', 'jueves', 'viernes', 'sabado', 'domingo'];
@@ -2340,8 +2341,9 @@ const EmployeeSectorConfigCrazy   = _crazyModel(EmployeeSectorConfig, 'EmployeeS
 const EmployeeClosingCrazy        = _crazyModel(EmployeeClosing, 'EmployeeClosingCrazy', 'employeeclosings_crazy');
 const PublicistaCrazy             = _crazyModel(Publicista, 'PublicistaCrazy', 'publicistas_crazy');
 const GastoFijoCrazy              = _crazyModel(GastoFijo, 'GastoFijoCrazy', 'gastosfijos_crazy');
+const GastoInternoCrazy           = _crazyModel(GastoInterno, 'GastoInternoCrazy', 'gastosinternos_crazy');
 
-const _MODELS_MAIN = { ClosingEntry, CotizacionEntry, CotizacionExternaEntry, EmployeeEntry, EmployeeSectorConfig, EmployeeClosing, Publicista, GastoFijo };
+const _MODELS_MAIN = { ClosingEntry, CotizacionEntry, CotizacionExternaEntry, EmployeeEntry, EmployeeSectorConfig, EmployeeClosing, Publicista, GastoFijo, GastoInterno };
 const _MODELS_CRAZY = {
   ClosingEntry: ClosingEntryCrazy,
   CotizacionEntry: CotizacionEntryCrazy,
@@ -2350,7 +2352,8 @@ const _MODELS_CRAZY = {
   EmployeeSectorConfig: EmployeeSectorConfigCrazy,
   EmployeeClosing: EmployeeClosingCrazy,
   Publicista: PublicistaCrazy,
-  GastoFijo: GastoFijoCrazy
+  GastoFijo: GastoFijoCrazy,
+  GastoInterno: GastoInternoCrazy
 };
 
 // Tenant del request: 'crazy' para el login crazy, 'main' para el resto.
@@ -2906,6 +2909,113 @@ function _normEstructuraIdx(v) {
   if (!Number.isFinite(n) || n < -1 || n > 2) return -1;
   return n;
 }
+
+// ============================================
+// GASTOS INTERNOS — categoría aparte de gastos fijos (PIN 100).
+// Mismo esquema, otra colección, otro acceso.
+// ============================================
+const GASTO_INTERNO_DELETE_PIN = '1818';
+function _gastoInternoEstructurasKey(req) {
+  return _tenantOf(req) === 'crazy' ? 'gastos_internos_estructuras__crazy' : 'gastos_internos_estructuras';
+}
+async function _getGastoInternoEstructuras(req) {
+  const v = await getConfig(_gastoInternoEstructurasKey(req), null);
+  if (!Array.isArray(v) || v.length === 0) return _GASTOS_FIJOS_DEFAULT_ESTRUCTURAS.slice();
+  const arr = v.map(x => String(x || '').trim()).slice(0, 3);
+  while (arr.length < 3) arr.push(_GASTOS_FIJOS_DEFAULT_ESTRUCTURAS[arr.length]);
+  return arr;
+}
+
+app.get('/api/admin/gastos-internos', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const { GastoInterno } = _models(req);
+    const items = await GastoInterno.find({}).sort({ active: -1, concepto: 1 }).lean();
+    res.json({ success: true, items, estructuras: await _getGastoInternoEstructuras(req) });
+  } catch (err) {
+    logger.error(`GET /api/admin/gastos-internos: ${err.stack || err.message}`);
+    res.status(500).json({ error: 'Error del servidor — ' + (err.message || 'desconocido') });
+  }
+});
+
+app.put('/api/admin/gastos-internos/estructuras', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const raw = (req.body && req.body.estructuras);
+    if (!Array.isArray(raw)) return res.status(400).json({ error: 'estructuras debe ser una lista' });
+    const arr = raw.slice(0, 3).map(x => String(x || '').trim().slice(0, 60));
+    while (arr.length < 3) arr.push(_GASTOS_FIJOS_DEFAULT_ESTRUCTURAS[arr.length]);
+    await setConfig(_gastoInternoEstructurasKey(req), arr);
+    res.json({ success: true, estructuras: arr });
+  } catch (err) {
+    logger.error(`PUT /api/admin/gastos-internos/estructuras: ${err.stack || err.message}`);
+    res.status(500).json({ error: 'Error del servidor — ' + (err.message || 'desconocido') });
+  }
+});
+
+app.post('/api/admin/gastos-internos', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const { GastoInterno } = _models(req);
+    const b = req.body || {};
+    const concepto = String(b.concepto || '').trim().slice(0, 100);
+    if (!concepto) return res.status(400).json({ error: 'El concepto no puede quedar vacío' });
+    const doc = await GastoInterno.create({
+      id: `gi_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      concepto,
+      moneda: (b.moneda === 'usdt') ? 'usdt' : 'pesos',
+      monto: Math.max(0, Number(b.monto) || 0),
+      usdtRate: Math.max(0, Number(b.usdtRate) || 0),
+      estructuraIdx: _normEstructuraIdx(b.estructuraIdx),
+      nota: String(b.nota || '').trim().slice(0, 200),
+      active: true,
+      createdBy: (req.user && req.user.username) || ''
+    });
+    res.json({ success: true, item: doc.toObject() });
+  } catch (err) {
+    logger.error(`POST /api/admin/gastos-internos: ${err.stack || err.message}`);
+    res.status(500).json({ error: 'Error del servidor — ' + (err.message || 'desconocido') });
+  }
+});
+
+app.put('/api/admin/gastos-internos/:id', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const { GastoInterno } = _models(req);
+    const id = String(req.params.id || '');
+    const b = req.body || {};
+    const set = {};
+    if (b.concepto !== undefined) {
+      const concepto = String(b.concepto || '').trim().slice(0, 100);
+      if (!concepto) return res.status(400).json({ error: 'El concepto no puede quedar vacío' });
+      set.concepto = concepto;
+    }
+    if (b.moneda !== undefined) set.moneda = (b.moneda === 'usdt') ? 'usdt' : 'pesos';
+    if (b.monto !== undefined) set.monto = Math.max(0, Number(b.monto) || 0);
+    if (b.usdtRate !== undefined) set.usdtRate = Math.max(0, Number(b.usdtRate) || 0);
+    if (b.estructuraIdx !== undefined) set.estructuraIdx = _normEstructuraIdx(b.estructuraIdx);
+    if (b.nota !== undefined) set.nota = String(b.nota || '').trim().slice(0, 200);
+    if (b.active !== undefined) set.active = !!b.active;
+    if (Object.keys(set).length === 0) return res.json({ success: true });
+    const r = await GastoInterno.updateOne({ id }, { $set: set });
+    if (!r.matchedCount) return res.status(404).json({ error: 'Gasto no encontrado' });
+    res.json({ success: true });
+  } catch (err) {
+    logger.error(`PUT /api/admin/gastos-internos/:id: ${err.stack || err.message}`);
+    res.status(500).json({ error: 'Error del servidor — ' + (err.message || 'desconocido') });
+  }
+});
+
+app.delete('/api/admin/gastos-internos/:id', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const { GastoInterno } = _models(req);
+    const id = String(req.params.id || '');
+    const pin = String((req.query && req.query.pin) || (req.body && req.body.pin) || '');
+    if (pin !== GASTO_INTERNO_DELETE_PIN) return res.status(403).json({ error: 'PIN incorrecto' });
+    const r = await GastoInterno.deleteOne({ id });
+    if (!r.deletedCount) return res.status(404).json({ error: 'Gasto no encontrado' });
+    res.json({ success: true });
+  } catch (err) {
+    logger.error(`DELETE /api/admin/gastos-internos/:id: ${err.stack || err.message}`);
+    res.status(500).json({ error: 'Error del servidor — ' + (err.message || 'desconocido') });
+  }
+});
 
 // ============================================
 // PUBLICIDAD — publicistas, envíos de plata y cierres diarios
