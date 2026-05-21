@@ -468,9 +468,9 @@ function showSection(sectionKey) {
         loadHistorialCotizacion();
     } else if (sectionKey === 'empleados') {
         loadEmpleados();
-        loadGastosFijos();
     } else if (sectionKey === 'publicidad') {
         loadPublicistas();
+        loadGastosFijos();
     }
 }
 

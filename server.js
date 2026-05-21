@@ -2806,7 +2806,7 @@ async function _getGastoFijoEstructuras(req) {
 }
 
 // GET — lista todos los gastos fijos + los nombres de las 3 estructuras.
-app.get('/api/admin/gastos-fijos', authMiddleware, closingsAccessMiddleware, async (req, res) => {
+app.get('/api/admin/gastos-fijos', authMiddleware, adminMiddleware, async (req, res) => {
   try {
     const { GastoFijo } = _models(req);
     const items = await GastoFijo.find({}).sort({ active: -1, concepto: 1 }).lean();
@@ -2818,7 +2818,7 @@ app.get('/api/admin/gastos-fijos', authMiddleware, closingsAccessMiddleware, asy
 });
 
 // PUT — guarda los nombres de las 3 estructuras.
-app.put('/api/admin/gastos-fijos/estructuras', authMiddleware, closingsAccessMiddleware, async (req, res) => {
+app.put('/api/admin/gastos-fijos/estructuras', authMiddleware, adminMiddleware, async (req, res) => {
   try {
     const raw = (req.body && req.body.estructuras);
     if (!Array.isArray(raw)) return res.status(400).json({ error: 'estructuras debe ser una lista' });
@@ -2833,7 +2833,7 @@ app.put('/api/admin/gastos-fijos/estructuras', authMiddleware, closingsAccessMid
 });
 
 // POST — crear gasto fijo nuevo.
-app.post('/api/admin/gastos-fijos', authMiddleware, closingsAccessMiddleware, async (req, res) => {
+app.post('/api/admin/gastos-fijos', authMiddleware, adminMiddleware, async (req, res) => {
   try {
     const { GastoFijo } = _models(req);
     const b = req.body || {};
@@ -2858,7 +2858,7 @@ app.post('/api/admin/gastos-fijos', authMiddleware, closingsAccessMiddleware, as
 });
 
 // PUT — actualizar gasto fijo.
-app.put('/api/admin/gastos-fijos/:id', authMiddleware, closingsAccessMiddleware, async (req, res) => {
+app.put('/api/admin/gastos-fijos/:id', authMiddleware, adminMiddleware, async (req, res) => {
   try {
     const { GastoFijo } = _models(req);
     const id = String(req.params.id || '');
@@ -2886,7 +2886,7 @@ app.put('/api/admin/gastos-fijos/:id', authMiddleware, closingsAccessMiddleware,
 });
 
 // DELETE — borrar gasto fijo (requiere PIN 1818).
-app.delete('/api/admin/gastos-fijos/:id', authMiddleware, closingsAccessMiddleware, async (req, res) => {
+app.delete('/api/admin/gastos-fijos/:id', authMiddleware, adminMiddleware, async (req, res) => {
   try {
     const { GastoFijo } = _models(req);
     const id = String(req.params.id || '');
