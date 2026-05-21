@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#1a0033">
     <meta name="robots" content="noindex, nofollow, noarchive">
     <title>Central Control</title>
-    <link rel="stylesheet" href="/admin.css?v=20260521a">
+    <link rel="stylesheet" href="/admin.css?v=20260521b">
     <link rel="manifest" href="/manifest.json">
     <style>
         /* Modo "vista reducida" — activo cuando la URL trae ?only=<seccion>.
@@ -280,7 +280,9 @@
                 </div>
 
                 <!-- Gastos fijos mensuales — luz, agua, alquileres, comisiones -->
-                <div id="gastosFijosBody" style="margin-top:24px;"></div>
+                <div id="gastosFijosBody" style="margin-top:24px;">
+                    <div style="color:#aaa;text-align:center;padding:16px;background:rgba(155,48,255,0.05);border:1.5px dashed rgba(155,48,255,0.40);border-radius:10px;">⏳ Cargando gastos fijos mensuales…</div>
+                </div>
             </section>
 
         </main>
@@ -414,6 +416,6 @@
 
     <!-- SheetJS para parsear .xlsx en el navegador (recontactación) -->
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-    <script src="/admin.js?v=20260521a"></script>
+    <script src="/admin.js?v=20260521b"></script>
 </body>
 </html>
