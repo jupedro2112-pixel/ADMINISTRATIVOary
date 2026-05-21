@@ -2308,8 +2308,19 @@ const Publicista = require('./src/models/Publicista');
 const GastoFijo = require('./src/models/GastoFijo');
 const EMP_DELETE_PIN = '1818';
 const EMP_SECTORS = ['ganamos', 'publicidad', 'buffalo'];
-const EMP_DIAS_MES = 30;
 const EMP_FRANCO_DAYS = ['lunes', 'martes', 'miercoles', 'jueves', 'viernes', 'sabado', 'domingo'];
+// Costo fijo de transferencia por empleado por mes (en USDT). Es general
+// para todos los empleados; cada uno recibe 1 transferencia/mes.
+const EMP_COMISION_TRANSFER_USD = 2;
+// Días del mes actual (28/29/30/31) en zona Argentina. Se usa como divisor
+// para el valor/día (sueldo/días del mes), reemplazando el viejo /30 fijo,
+// para alinear con los cálculos del cliente.
+function _empDiasMesActual() {
+  const arStr = new Date().toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires' });
+  const ar = new Date(arStr);
+  // Día 0 del mes siguiente = último día del mes actual.
+  return new Date(ar.getFullYear(), ar.getMonth() + 1, 0).getDate();
+}
 
 // ============================================================
 // DATOS SEPARADOS POR LOGIN (multi-tenant por colección)
@@ -2357,7 +2368,7 @@ function _models(req) {
 // del sector — se suman salvo los que el empleado tenga excluidos.
 function _empCompute(e, sectorCfg) {
   const sueldo = Number(e.sueldoARS || 0);
-  const valorDia = sueldo / EMP_DIAS_MES;
+  const valorDia = sueldo / _empDiasMesActual();
   const feriados = Array.isArray(e.feriados) ? e.feriados : [];
   const faltantes = Array.isArray(e.faltantes) ? e.faltantes : [];
   const descuentos = Array.isArray(e.descuentos) ? e.descuentos : [];
@@ -2382,9 +2393,10 @@ function _empCompute(e, sectorCfg) {
   // Ajustes manuales: pueden ser + o − (ej. diferencia por cambio de turno).
   const ajustes = Array.isArray(e.ajustes) ? e.ajustes : [];
   const ajustesTotal = ajustes.reduce((s, a) => s + Number(a.amountARS || 0), 0);
-  // Comisión: costo fijo de transferencia en USD → ARS con la cotización
-  // del sector. Es un gasto aparte del sueldo (no lo recibe el empleado).
-  const comisionUSD = Number(e.comisionUSD != null ? e.comisionUSD : 2);
+  // Comisión: costo FIJO de transferencia en USDT por empleado/mes. Es un
+  // gasto aparte del sueldo (no lo recibe el empleado). General para todos,
+  // por eso no se configura por empleado.
+  const comisionUSD = EMP_COMISION_TRANSFER_USD;
   const usdRate = Number((sectorCfg && sectorCfg.usdRate) || 0);
   const comisionARS = comisionUSD * usdRate;
   const totalMensual = sueldo + feriadosTotal + feriadosGeneralesTotal

@@ -3926,11 +3926,25 @@ const EMP_FRANCO_DAYS_UI = [
     { key: 'domingo',   short: 'Dom' }
 ];
 
+// Costo fijo de transferencia por empleado por mes (USDT). Es general.
+const EMP_COMISION_TRANSFER_USD = 2;
+// Días del mes actual (28-31) en zona Argentina.
+function _empDiasMesActual() {
+    const arStr = new Date().toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires' });
+    const ar = new Date(arStr);
+    return new Date(ar.getFullYear(), ar.getMonth() + 1, 0).getDate();
+}
+// Formato $ con 2 decimales — sin redondear para no perder centavos.
+function _empFmt(n) {
+    const v = Number(n) || 0;
+    return '$' + v.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
 // Cálculo local del pago — espeja _empCompute del server para que el
 // resumen refleje al instante lo cargado antes de guardar.
 function _empComputeLocal(e) {
     const sueldo = Number(e.sueldoARS || 0);
-    const valorDia = sueldo / 30;
+    const valorDia = sueldo / _empDiasMesActual();
     const feriados = Array.isArray(e.feriados) ? e.feriados : [];
     const faltantes = Array.isArray(e.faltantes) ? e.faltantes : [];
     const descuentos = Array.isArray(e.descuentos) ? e.descuentos : [];
@@ -3952,7 +3966,8 @@ function _empComputeLocal(e) {
     const descuentosTotal = descuentos.reduce((s, d) => s + Number(d.amountARS || 0), 0);
     const ajustes = Array.isArray(e.ajustes) ? e.ajustes : [];
     const ajustesTotal = ajustes.reduce((s, a) => s + Number(a.amountARS || 0), 0);
-    const comisionUSD = Number(e.comisionUSD != null ? e.comisionUSD : 2);
+    // Comisión fija de transferencia: 2 USDT por empleado (general).
+    const comisionUSD = EMP_COMISION_TRANSFER_USD;
     const usdRate = Number(((_empSectorConfigs[e.sector] || {}).usdRate) || 0);
     const comisionARS = comisionUSD * usdRate;
     const totalMensual = sueldo + feriadosTotal + feriadosGeneralesTotal - faltantesTotal - descuentosTotal + ajustesTotal;
@@ -4226,7 +4241,7 @@ function _renderEmpleados() {
     } else {
         h += '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:11.5px;">';
         h += '<thead><tr style="color:#999;text-align:left;border-bottom:1px solid rgba(255,255,255,0.12);">';
-        h += '<th style="padding:6px;">Empleado</th><th style="padding:6px;">Días que trabaja</th><th style="padding:6px;">Francos</th><th style="padding:6px;">Feriados generales</th><th style="padding:6px;text-align:right;">Cobró ARS</th><th style="padding:6px;text-align:right;">Cobró USD</th>';
+        h += '<th style="padding:6px;">Empleado</th><th style="padding:6px;">Días que trabaja</th><th style="padding:6px;">Francos</th><th style="padding:6px;">Feriados generales</th><th style="padding:6px;text-align:right;" title="con comisión de transferencia incluida">Costo total ARS</th><th style="padding:6px;text-align:right;">Costo total USD</th>';
         h += '</tr></thead><tbody>';
         let _tA = 0, _tU = 0;
         for (const e of items) {
@@ -4234,22 +4249,22 @@ function _renderEmpleados() {
             const fd = Array.isArray(e.francoDays) ? e.francoDays : [];
             const trabaja = EMP_FRANCO_DAYS_UI.filter(d => fd.indexOf(d.key) < 0).map(d => d.short);
             const francos = EMP_FRANCO_DAYS_UI.filter(d => fd.indexOf(d.key) >= 0).map(d => d.short);
-            const usd = _usdRate > 0 ? (rc.totalMensual / _usdRate) : 0;
-            _tA += rc.totalMensual; _tU += usd;
+            const usd = _usdRate > 0 ? (rc.costoTotal / _usdRate) : 0;
+            _tA += rc.costoTotal; _tU += usd;
             const inact = e.active === false;
             h += '<tr style="border-bottom:1px solid rgba(255,255,255,0.05);' + (inact ? 'opacity:0.5;' : '') + '">';
             h += '<td style="padding:6px;color:#fff;font-weight:700;">' + escapeHtml(e.name || '(sin nombre)') + (inact ? ' <span style="color:#ffaa66;font-size:9px;">INACTIVO</span>' : '') + '<br><span style="color:#888;font-size:10px;font-weight:600;">' + escapeHtml(_empRoleLabel(e.role || '')) + '</span></td>';
             h += '<td style="padding:6px;color:#25d366;font-weight:700;">' + (trabaja.length ? escapeHtml(trabaja.join(' ')) + ' <span style="color:#888;">(' + trabaja.length + ')</span>' : '—') + '</td>';
             h += '<td style="padding:6px;color:#0f0;font-weight:700;">' + (francos.length ? escapeHtml(francos.join(' ')) : '—') + '</td>';
             h += '<td style="padding:6px;">' + _empGeneralFeriadoChips(e) + '</td>';
-            h += '<td style="padding:6px;text-align:right;color:#c89bff;font-weight:900;">' + formatMoney(Math.round(rc.totalMensual)) + '</td>';
-            h += '<td style="padding:6px;text-align:right;color:#25d366;font-weight:900;">' + (_usdRate > 0 ? ('US$ ' + (Math.round(usd * 100) / 100).toLocaleString('es-AR')) : '—') + '</td>';
+            h += '<td style="padding:6px;text-align:right;color:#ffd700;font-weight:900;">' + _empFmt(rc.costoTotal) + '</td>';
+            h += '<td style="padding:6px;text-align:right;color:#25d366;font-weight:900;">' + (_usdRate > 0 ? ('US$ ' + usd.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })) : '—') + '</td>';
             h += '</tr>';
         }
         h += '<tr style="border-top:2px solid rgba(255,255,255,0.15);color:#fff;font-weight:900;">';
-        h += '<td style="padding:7px 6px;" colspan="4">TOTAL SECTOR</td>';
-        h += '<td style="padding:7px 6px;text-align:right;color:#c89bff;">' + formatMoney(Math.round(_tA)) + '</td>';
-        h += '<td style="padding:7px 6px;text-align:right;color:#25d366;">' + (_usdRate > 0 ? ('US$ ' + (Math.round(_tU * 100) / 100).toLocaleString('es-AR')) : '—') + '</td>';
+        h += '<td style="padding:7px 6px;" colspan="4">TOTAL SECTOR (con comisiones)</td>';
+        h += '<td style="padding:7px 6px;text-align:right;color:#ffd700;">' + _empFmt(_tA) + '</td>';
+        h += '<td style="padding:7px 6px;text-align:right;color:#25d366;">' + (_usdRate > 0 ? ('US$ ' + _tU.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })) : '—') + '</td>';
         h += '</tr>';
         h += '</tbody></table></div>';
         if (_usdRate <= 0) {
@@ -4289,12 +4304,12 @@ function _renderEmpleados() {
 
     for (const role of sortedRoles) {
         const arr = byRole[role];
-        const roleTotal = arr.reduce((a, e) => a + _empComputeLocal(e).totalMensual, 0);
+        const roleTotal = arr.reduce((a, e) => a + _empComputeLocal(e).costoTotal, 0);
         const roleSueldo = arr.reduce((a, e) => a + Number(e.sueldoARS || 0), 0);
         h += '<div style="background:rgba(0,0,0,0.30);border:1px solid rgba(255,255,255,0.08);border-radius:10px;margin-bottom:12px;overflow:hidden;">';
         h += '<div style="padding:10px 14px;background:rgba(155,48,255,0.06);border-bottom:1px solid rgba(255,255,255,0.06);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">';
         h += '<div style="color:#c89bff;font-weight:900;font-size:13px;letter-spacing:0.5px;">👤 ' + escapeHtml(_empRoleLabel(role)) + ' <span style="color:#888;font-size:11px;font-weight:700;">· ' + arr.length + (arr.length === 1 ? ' persona' : ' personas') + '</span></div>';
-        h += '<div style="color:#fff;font-weight:900;font-size:13.5px;">' + formatMoney(Math.round(roleTotal)) + ' <span style="color:#888;font-size:10.5px;font-weight:700;">(sueldo: ' + formatMoney(Math.round(roleSueldo)) + ')</span></div>';
+        h += '<div style="color:#fff;font-weight:900;font-size:13.5px;" title="costo total con comisión incluida">' + _empFmt(roleTotal) + ' <span style="color:#888;font-size:10.5px;font-weight:700;">(sueldo: ' + _empFmt(roleSueldo) + ')</span></div>';
         h += '</div>';
         h += '<div>';
         for (const e of arr) {
@@ -4328,7 +4343,6 @@ function _renderEmpleadoRow(e) {
     h += '<div><label style="' + lbl + '">Horario</label><input data-emp-field="schedule" type="text" value="' + escapeHtml(e.schedule || '') + '" placeholder="Ej: lun-vie 10-18hs" maxlength="200" style="' + inp + '"></div>';
     h += '<div><label style="' + lbl + '">Puesto</label><input data-emp-field="role" type="text" value="' + escapeHtml(e.role || '') + '" maxlength="60" style="' + inp + 'border-color:rgba(155,48,255,0.30);color:#c89bff;font-weight:700;"></div>';
     h += '<div><label style="' + lbl + '">Sueldo base $</label><input data-emp-field="sueldoARS" type="number" min="0" step="1000" value="' + Number(e.sueldoARS || 0) + '" style="' + inp + 'border-color:rgba(0,212,255,0.30);color:#00d4ff;font-weight:800;text-align:right;"></div>';
-    h += '<div><label style="' + lbl + '">Comisión transfer. (USD)</label><input data-emp-field="comisionUSD" type="number" min="0" step="0.5" value="' + Number(e.comisionUSD != null ? e.comisionUSD : 2) + '" style="' + inp + 'border-color:rgba(255,170,102,0.30);color:#ffaa66;font-weight:800;text-align:right;"></div>';
     h += '</div>';
 
     // === Francos + Trabajó hasta ===
@@ -4443,17 +4457,17 @@ function _renderEmpleadoRow(e) {
         ? francoDays.map(k => (EMP_FRANCO_DAYS_UI.find(x => x.key === k) || {}).short || k).join(', ')
         : '—';
     h += '<div style="margin-top:10px;background:rgba(155,48,255,0.07);border:1px solid rgba(155,48,255,0.30);border-radius:9px;padding:10px 13px;">';
-    h += '<div style="color:#c89bff;font-size:10.5px;font-weight:900;letter-spacing:0.6px;margin-bottom:6px;">📊 RESUMEN — valor/día: ' + formatMoney(Math.round(valorDia)) + ' · francos: ' + Number(e.francosPerWeek || 0) + '/sem (' + escapeHtml(francoTxt) + ')' + (e.workedUntil ? ' · trabajó hasta ' + escapeHtml(e.workedUntil) : '') + '</div>';
+    h += '<div style="color:#c89bff;font-size:10.5px;font-weight:900;letter-spacing:0.6px;margin-bottom:6px;">📊 RESUMEN — valor/día: ' + _empFmt(valorDia) + ' (sueldo ÷ ' + _empDiasMesActual() + ' días) · francos: ' + Number(e.francosPerWeek || 0) + '/sem (' + escapeHtml(francoTxt) + ')' + (e.workedUntil ? ' · trabajó hasta ' + escapeHtml(e.workedUntil) : '') + '</div>';
     h += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:6px;font-size:11.5px;">';
-    h += '<div style="color:#aaa;">Sueldo base<br><span style="color:#fff;font-weight:800;">' + formatMoney(Math.round(c.sueldoARS)) + '</span></div>';
-    h += '<div style="color:#aaa;">+ Feriados (' + c.feriadosCount + ')<br><span style="color:#ffaa66;font-weight:800;">+' + formatMoney(Math.round(c.feriadosTotal)) + '</span></div>';
-    h += '<div style="color:#aaa;">+ Feriados grales (' + c.feriadosGeneralesCount + ')<br><span style="color:#ffd700;font-weight:800;">+' + formatMoney(Math.round(c.feriadosGeneralesTotal)) + '</span></div>';
-    h += '<div style="color:#aaa;">− Faltas (' + c.faltantesCount + ')<br><span style="color:#f55;font-weight:800;">-' + formatMoney(Math.round(c.faltantesTotal)) + '</span></div>';
-    h += '<div style="color:#aaa;">− Descuentos (' + c.descuentosCount + ')<br><span style="color:#f55;font-weight:800;">-' + formatMoney(Math.round(c.descuentosTotal)) + '</span></div>';
-    h += '<div style="color:#aaa;">⇄ Ajustes (' + c.ajustesCount + ')<br><span style="color:#00d4ff;font-weight:800;">' + (c.ajustesTotal >= 0 ? '+' : '') + formatMoney(Math.round(c.ajustesTotal)) + '</span></div>';
-    h += '<div style="color:#aaa;">= TOTAL MENSUAL<br><span style="color:#c89bff;font-weight:900;font-size:14px;">' + formatMoney(Math.round(c.totalMensual)) + '</span></div>';
-    h += '<div style="color:#aaa;">+ Comisión transfer.<br><span style="color:#ffaa66;font-weight:800;">+' + formatMoney(Math.round(c.comisionARS)) + '</span> <span style="color:#666;font-size:10px;">(' + c.comisionUSD + ' USD)</span></div>';
-    h += '<div style="color:#aaa;">= COSTO TOTAL<br><span style="color:#ffd700;font-weight:900;font-size:14px;">' + formatMoney(Math.round(c.costoTotal)) + '</span></div>';
+    h += '<div style="color:#aaa;">Sueldo base<br><span style="color:#fff;font-weight:800;">' + _empFmt(c.sueldoARS) + '</span></div>';
+    h += '<div style="color:#aaa;">+ Feriados (' + c.feriadosCount + ')<br><span style="color:#ffaa66;font-weight:800;">+' + _empFmt(c.feriadosTotal) + '</span></div>';
+    h += '<div style="color:#aaa;">+ Feriados grales (' + c.feriadosGeneralesCount + ')<br><span style="color:#ffd700;font-weight:800;">+' + _empFmt(c.feriadosGeneralesTotal) + '</span></div>';
+    h += '<div style="color:#aaa;">− Faltas (' + c.faltantesCount + ')<br><span style="color:#f55;font-weight:800;">-' + _empFmt(c.faltantesTotal) + '</span></div>';
+    h += '<div style="color:#aaa;">− Descuentos (' + c.descuentosCount + ')<br><span style="color:#f55;font-weight:800;">-' + _empFmt(c.descuentosTotal) + '</span></div>';
+    h += '<div style="color:#aaa;">⇄ Ajustes (' + c.ajustesCount + ')<br><span style="color:#00d4ff;font-weight:800;">' + (c.ajustesTotal >= 0 ? '+' : '') + _empFmt(c.ajustesTotal) + '</span></div>';
+    h += '<div style="color:#aaa;">Sub-total cobra<br><span style="color:#c89bff;font-weight:800;font-size:12px;">' + _empFmt(c.totalMensual) + '</span></div>';
+    h += '<div style="color:#aaa;">+ Comisión transfer.<br><span style="color:#ffaa66;font-weight:800;">+' + _empFmt(c.comisionARS) + '</span> <span style="color:#666;font-size:10px;">(' + c.comisionUSD + ' USDT)</span></div>';
+    h += '<div style="color:#aaa;grid-column:span 2;background:rgba(255,215,0,0.06);border:1.5px solid rgba(255,215,0,0.45);border-radius:7px;padding:6px 10px;">💰 COSTO TOTAL (con comisión)<br><span style="color:#ffd700;font-weight:900;font-size:17px;">' + _empFmt(c.costoTotal) + '</span></div>';
     h += '</div></div>';
 
     // === Botones ===
@@ -4517,7 +4531,7 @@ function _collectEmpPayload(id) {
         schedule: get('schedule'),
         role: (get('role') || '').toLowerCase().trim(),
         sueldoARS: Number(get('sueldoARS')) || 0,
-        comisionUSD: Number(get('comisionUSD')) || 0,
+        // comisionUSD ya no se manda: la comisión es fija (EMP_COMISION_TRANSFER_USD) general.
         francosPerWeek: Number(get('francosPerWeek')) || 0,
         workedUntil: get('workedUntil') || '',
         feriados,
