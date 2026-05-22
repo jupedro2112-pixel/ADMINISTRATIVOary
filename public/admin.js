@@ -4859,12 +4859,17 @@ function _gfToARS(g) {
     return m;
 }
 
+let _gfCierresCache = [];
+
 async function loadGastosFijos() {
     const body = document.getElementById('gastosFijosBody');
     if (!body) return;
     body.innerHTML = '<div style="color:#aaa;text-align:center;padding:16px;">⏳ Cargando gastos fijos…</div>';
     try {
-        const r = await authFetch('/api/admin/gastos-fijos');
+        const [r, rh] = await Promise.all([
+            authFetch('/api/admin/gastos-fijos'),
+            authFetch('/api/admin/gastos-fijos/cierres')
+        ]);
         const d = await r.json();
         if (!r.ok || !d.success) {
             body.innerHTML = '<div style="color:#ff8080;padding:14px;">❌ ' + escapeHtml(d.error || 'Error') + '</div>';
@@ -4872,6 +4877,10 @@ async function loadGastosFijos() {
         }
         _gastosFijosCache = d.items || [];
         if (Array.isArray(d.estructuras) && d.estructuras.length === 3) _gastoEstructuras = d.estructuras;
+        try {
+            const dh = await rh.json();
+            _gfCierresCache = (rh.ok && dh.success) ? (dh.items || []) : [];
+        } catch (_) { _gfCierresCache = []; }
         _renderGastosFijos();
     } catch (e) {
         body.innerHTML = '<div style="color:#ff8080;padding:14px;">Error: ' + escapeHtml(e.message || '') + '</div>';
@@ -4898,6 +4907,7 @@ function _renderGastosFijos() {
     h += '<span style="color:#c89bff;font-weight:900;font-size:14px;letter-spacing:0.5px;">💸 GASTOS FIJOS MENSUALES</span>';
     h += '<div style="display:flex;gap:6px;flex-wrap:wrap;">';
     h += '<button type="button" onclick="_gfEditEstructurasModal()" style="background:rgba(155,48,255,0.10);color:#c89bff;border:1px solid rgba(155,48,255,0.40);padding:5px 11px;border-radius:6px;font-weight:800;font-size:11px;cursor:pointer;">✏️ Nombres de estructuras</button>';
+    h += '<button type="button" onclick="cerrarMesGastosFijos()" title="Snapshotea el mes actual al historial (PIN 1818)" style="background:rgba(212,175,55,0.12);color:#d4af37;border:1px solid rgba(212,175,55,0.45);padding:5px 11px;border-radius:6px;font-weight:800;font-size:11px;cursor:pointer;">💼 Cerrar mes</button>';
     h += '<button type="button" onclick="addGastoFijo()" style="background:linear-gradient(135deg,#9b30ff,#c89bff);color:#000;border:none;padding:5px 14px;border-radius:6px;font-weight:900;font-size:11px;cursor:pointer;">➕ Agregar gasto</button>';
     h += '</div></div>';
 
@@ -4955,6 +4965,8 @@ function _renderGastosFijos() {
         h += '</div></div>';
     }
     h += '</div>';
+    // Historial de cierres mensuales.
+    h += _renderHistorialGastos(_gfCierresCache, 'fijos');
     body.innerHTML = h;
 }
 
@@ -5092,13 +5104,17 @@ async function _gfSaveEstructuras() {
 // ============================================================
 let _gastosInternosCache = [];
 let _gastoInternoEstructuras = ['Estructura 1', 'Estructura 2', 'Estructura 3'];
+let _giCierresCache = [];
 
 async function loadGastosInternos() {
     const body = document.getElementById('gastosInternosBody');
     if (!body) return;
     body.innerHTML = '<div style="color:#aaa;text-align:center;padding:16px;">⏳ Cargando gastos internos…</div>';
     try {
-        const r = await authFetch('/api/admin/gastos-internos');
+        const [r, rh] = await Promise.all([
+            authFetch('/api/admin/gastos-internos'),
+            authFetch('/api/admin/gastos-internos/cierres')
+        ]);
         const d = await r.json();
         if (!r.ok || !d.success) {
             body.innerHTML = '<div style="color:#ff8080;padding:14px;">❌ ' + escapeHtml(d.error || 'Error') + '</div>';
@@ -5106,6 +5122,10 @@ async function loadGastosInternos() {
         }
         _gastosInternosCache = d.items || [];
         if (Array.isArray(d.estructuras) && d.estructuras.length === 3) _gastoInternoEstructuras = d.estructuras;
+        try {
+            const dh = await rh.json();
+            _giCierresCache = (rh.ok && dh.success) ? (dh.items || []) : [];
+        } catch (_) { _giCierresCache = []; }
         _renderGastosInternos();
     } catch (e) {
         body.innerHTML = '<div style="color:#ff8080;padding:14px;">Error: ' + escapeHtml(e.message || '') + '</div>';
@@ -5131,6 +5151,7 @@ function _renderGastosInternos() {
     h += '<span style="color:#ffd479;font-weight:900;font-size:14px;letter-spacing:0.5px;">🏛️ GASTOS INTERNOS MENSUALES</span>';
     h += '<div style="display:flex;gap:6px;flex-wrap:wrap;">';
     h += '<button type="button" onclick="_giEditEstructurasModal()" style="background:rgba(255,212,121,0.12);color:#ffd479;border:1px solid rgba(255,212,121,0.45);padding:5px 11px;border-radius:6px;font-weight:800;font-size:11px;cursor:pointer;">✏️ Nombres de estructuras</button>';
+    h += '<button type="button" onclick="cerrarMesGastosInternos()" title="Snapshotea el mes actual al historial (PIN 100)" style="background:rgba(212,175,55,0.12);color:#d4af37;border:1px solid rgba(212,175,55,0.45);padding:5px 11px;border-radius:6px;font-weight:800;font-size:11px;cursor:pointer;">💼 Cerrar mes</button>';
     h += '<button type="button" onclick="addGastoInterno()" style="background:linear-gradient(135deg,#d4a040,#ffd479);color:#000;border:none;padding:5px 14px;border-radius:6px;font-weight:900;font-size:11px;cursor:pointer;">➕ Agregar gasto</button>';
     h += '</div></div>';
 
@@ -5187,6 +5208,8 @@ function _renderGastosInternos() {
         h += '</div></div>';
     }
     h += '</div>';
+    // Historial de cierres mensuales.
+    h += _renderHistorialGastos(_giCierresCache, 'internos');
     body.innerHTML = h;
 }
 
@@ -5304,6 +5327,197 @@ async function _giSaveEstructuras() {
         showToast('✅ Estructuras actualizadas', 'success');
         _renderGastosInternos();
     } catch (e) { showToast('Error de conexión', 'error'); }
+}
+
+// ============================================================
+// HISTORIAL DE CIERRES DE GASTOS (fijos + internos)
+// ============================================================
+// `kind` = 'fijos' | 'internos'. Cada uno tiene su PIN y rutas.
+const _GASTO_KIND_CFG = {
+    fijos:    { label: 'gastos fijos',    base: '/api/admin/gastos-fijos/cierres',    pin: '1818', color: '#c89bff' },
+    internos: { label: 'gastos internos', base: '/api/admin/gastos-internos/cierres', pin: '100',  color: '#ffd479' }
+};
+
+function _renderHistorialGastos(cierres, kind) {
+    const cfg = _GASTO_KIND_CFG[kind];
+    let h = '<div style="margin-top:18px;background:rgba(0,0,0,0.30);border:1px solid rgba(255,255,255,0.08);border-radius:11px;padding:13px;">';
+    h += '<div style="color:#d4af37;font-weight:900;font-size:12.5px;letter-spacing:0.5px;margin-bottom:9px;">📜 HISTORIAL DE CIERRES MENSUALES</div>';
+    if (!cierres || cierres.length === 0) {
+        h += '<div style="color:#888;font-size:11px;padding:6px 2px;">Sin cierres todavía. Tocá <strong style="color:#d4af37;">💼 Cerrar mes</strong> arriba para guardar la foto del mes actual.</div>';
+    } else {
+        for (const c of cierres) {
+            const fch = c.closedAt ? new Date(c.closedAt).toLocaleDateString('es-AR') : '';
+            const pagado = !!c.paid;
+            const borderCol = pagado ? 'rgba(102,255,102,0.35)' : 'rgba(255,255,255,0.08)';
+            h += '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;background:rgba(0,0,0,0.30);border:1px solid ' + borderCol + ';border-radius:8px;padding:8px 11px;margin-bottom:6px;">';
+            h += '<div style="min-width:0;flex:1;">';
+            h += '<div style="color:#fff;font-weight:800;font-size:12.5px;">' + escapeHtml(c.periodLabel || fch || 'Cierre') + (pagado ? ' <span style="color:#66ff66;font-size:10.5px;">✅ PAGADO</span>' : ' <span style="color:#ffaa66;font-size:10.5px;">⏳ SIN PAGAR</span>') + '</div>';
+            h += '<div style="color:#888;font-size:10.5px;">' + escapeHtml(fch) + ' · ' + (c.itemCount || 0) + ' ítems · <strong style="color:' + cfg.color + ';">' + _gfFmt(c.totalARS || 0) + '</strong></div>';
+            h += '</div>';
+            h += '<div style="display:flex;gap:5px;flex-wrap:wrap;">';
+            h += '<label style="display:flex;align-items:center;gap:4px;font-size:11px;color:#fff;cursor:pointer;background:rgba(255,255,255,0.04);padding:4px 9px;border-radius:6px;"><input type="checkbox" ' + (pagado ? 'checked' : '') + ' onchange="toggleCierreGastoPaid(\'' + kind + '\',\'' + escapeHtml(c.id) + '\', this.checked)"> Pagado</label>';
+            h += '<button onclick="verCierreGasto(\'' + kind + '\',\'' + escapeHtml(c.id) + '\')" style="background:rgba(212,175,55,0.12);color:#d4af37;border:1px solid rgba(212,175,55,0.40);padding:4px 11px;border-radius:6px;font-weight:800;font-size:11px;cursor:pointer;">👁 Ver detalle</button>';
+            h += '<button onclick="borrarCierreGasto(\'' + kind + '\',\'' + escapeHtml(c.id) + '\')" title="Borrar cierre" style="background:rgba(255,80,80,0.10);color:#f55;border:1px solid rgba(255,80,80,0.30);padding:4px 9px;border-radius:6px;font-weight:800;font-size:11px;cursor:pointer;">🗑</button>';
+            h += '</div></div>';
+        }
+    }
+    h += '</div>';
+    return h;
+}
+
+async function cerrarMesGastosFijos() { return _cerrarMesGasto('fijos'); }
+async function cerrarMesGastosInternos() { return _cerrarMesGasto('internos'); }
+
+async function _cerrarMesGasto(kind) {
+    const cfg = _GASTO_KIND_CFG[kind];
+    // Guardar primero los cambios sin guardar de la tabla viva, así el snapshot
+    // refleja exactamente lo que se ve.
+    if (kind === 'fijos') _gfCollectAll(); else _giCollectAll();
+    const periodLabel = ((prompt('Etiqueta del período (ej: Mayo 2026):', _defaultPeriodLabel()) || '').trim()).slice(0, 80);
+    if (!periodLabel) return;
+    const pin = prompt('PIN para cerrar el mes (' + cfg.label + '):');
+    if (pin == null) return;
+    if (pin !== cfg.pin) { showToast('PIN incorrecto', 'error'); return; }
+    try {
+        const r = await authFetch(cfg.base.replace('/cierres', '/cierre'), {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ periodLabel, pin })
+        });
+        const d = await r.json();
+        if (!r.ok || !d.success) { showToast(d.error || 'Error al cerrar', 'error'); return; }
+        showToast('💼 Mes cerrado · ' + (d.itemCount || 0) + ' ítems · ' + _gfFmt(d.totalARS || 0), 'success');
+        if (kind === 'fijos') await loadGastosFijos(); else await loadGastosInternos();
+    } catch (e) { showToast('Error de conexión', 'error'); }
+}
+
+function _defaultPeriodLabel() {
+    const meses = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
+    const arStr = new Date().toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires' });
+    const ar = new Date(arStr);
+    return meses[ar.getMonth()] + ' ' + ar.getFullYear();
+}
+
+async function toggleCierreGastoPaid(kind, id, paid) {
+    const cfg = _GASTO_KIND_CFG[kind];
+    try {
+        const r = await authFetch(cfg.base + '/' + encodeURIComponent(id) + '/paid', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ paid })
+        });
+        const d = await r.json();
+        if (!r.ok || !d.success) { showToast(d.error || 'Error', 'error'); return; }
+        showToast(paid ? '✅ Marcado pagado' : '⏳ Marcado sin pagar', 'success');
+        if (kind === 'fijos') await loadGastosFijos(); else await loadGastosInternos();
+    } catch (e) { showToast('Error de conexión', 'error'); }
+}
+
+async function borrarCierreGasto(kind, id) {
+    const cfg = _GASTO_KIND_CFG[kind];
+    if (!confirm('¿Borrar este cierre del historial? Es irreversible.')) return;
+    const pin = prompt('PIN para borrar:');
+    if (pin == null) return;
+    if (!pin) { showToast('PIN requerido', 'error'); return; }
+    try {
+        const r = await authFetch(cfg.base + '/' + encodeURIComponent(id) + '?pin=' + encodeURIComponent(pin), { method: 'DELETE' });
+        const d = await r.json();
+        if (!r.ok || !d.success) { showToast(d.error || 'Error', 'error'); return; }
+        showToast('🗑 Cierre borrado', 'success');
+        if (kind === 'fijos') await loadGastosFijos(); else await loadGastosInternos();
+    } catch (e) { showToast('Error de conexión', 'error'); }
+}
+
+async function verCierreGasto(kind, id) {
+    const cfg = _GASTO_KIND_CFG[kind];
+    try {
+        const r = await authFetch(cfg.base + '/' + encodeURIComponent(id));
+        const d = await r.json();
+        if (!r.ok || !d.success) { showToast(d.error || 'Error', 'error'); return; }
+        _mostrarModalCierreGasto(kind, d.item, d.previous);
+    } catch (e) { showToast('Error de conexión', 'error'); }
+}
+
+function _mostrarModalCierreGasto(kind, c, prev) {
+    document.getElementById('cierreGastoModal')?.remove();
+    const cfg = _GASTO_KIND_CFG[kind];
+    // Index previo por concepto (case-insensitive) para calcular deltas.
+    const prevByConcepto = {};
+    if (prev && Array.isArray(prev.items)) {
+        for (const it of prev.items) {
+            const k = String(it.concepto || '').trim().toLowerCase();
+            if (k) prevByConcepto[k] = it;
+        }
+    }
+    const fch = c.closedAt ? new Date(c.closedAt).toLocaleString('es-AR') : '';
+    const estrucs = Array.isArray(c.estructuras) && c.estructuras.length === 3
+        ? c.estructuras : ['Estructura 1', 'Estructura 2', 'Estructura 3'];
+
+    const modal = document.createElement('div');
+    modal.id = 'cierreGastoModal';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.78);z-index:10000;display:flex;align-items:center;justify-content:center;padding:18px;overflow-y:auto;';
+    let h = '<div style="background:#181818;border:1.5px solid rgba(212,175,55,0.45);border-radius:12px;padding:18px;max-width:880px;width:100%;max-height:92vh;overflow-y:auto;">';
+    h += '<div style="display:flex;justify-content:space-between;align-items:start;gap:10px;flex-wrap:wrap;margin-bottom:12px;">';
+    h += '<div><h3 style="color:#d4af37;margin:0;font-size:16px;">📜 ' + escapeHtml(c.periodLabel || 'Cierre') + ' · ' + cfg.label + '</h3>';
+    h += '<div style="color:#888;font-size:11px;margin-top:3px;">Cerrado el ' + escapeHtml(fch) + ' por ' + escapeHtml(c.closedBy || '—') + ' · ' + (c.itemCount || 0) + ' ítems · total <strong style="color:' + cfg.color + ';">' + _gfFmt(c.totalARS || 0) + '</strong>' + (c.paid ? ' · <span style="color:#66ff66;">✅ pagado</span>' : ' · <span style="color:#ffaa66;">⏳ sin pagar</span>') + '</div>';
+    if (prev) {
+        const pfch = prev.closedAt ? new Date(prev.closedAt).toLocaleDateString('es-AR') : '';
+        const deltaTotal = (Number(c.totalARS) || 0) - (Number(prev.totalARS) || 0);
+        const arrow = deltaTotal > 0 ? '▲' : (deltaTotal < 0 ? '▼' : '•');
+        const dcol = deltaTotal > 0 ? '#ff7070' : (deltaTotal < 0 ? '#66ff99' : '#aaa');
+        h += '<div style="color:#888;font-size:10.5px;margin-top:3px;">Comparado con <strong>' + escapeHtml(prev.periodLabel || pfch) + '</strong>: <span style="color:' + dcol + ';font-weight:800;">' + arrow + ' ' + _gfFmt(Math.abs(deltaTotal)) + '</span></div>';
+    } else {
+        h += '<div style="color:#666;font-size:10.5px;margin-top:3px;font-style:italic;">Primer cierre — no hay mes previo para comparar.</div>';
+    }
+    h += '</div>';
+    h += '<button onclick="document.getElementById(\'cierreGastoModal\').remove()" style="background:rgba(255,255,255,0.07);color:#ddd;border:1px solid rgba(255,255,255,0.18);padding:6px 12px;border-radius:6px;font-weight:700;font-size:12px;cursor:pointer;">✕ Cerrar</button>';
+    h += '</div>';
+
+    // Tabla de ítems con delta vs previo.
+    const items = Array.isArray(c.items) ? c.items : [];
+    if (items.length === 0) {
+        h += '<div style="color:#888;text-align:center;padding:18px;">Sin ítems en el cierre.</div>';
+    } else {
+        const cols = '1.6fr 100px 110px 1fr 90px 1.2fr';
+        h += '<div style="overflow-x:auto;"><div style="min-width:720px;">';
+        h += '<div style="display:grid;grid-template-columns:' + cols + ';gap:6px;font-size:9px;color:#888;text-transform:uppercase;font-weight:700;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.10);">';
+        h += '<div>Concepto</div><div>Moneda</div><div>Monto</div><div>Equiv. ARS</div><div>Δ vs prev</div><div>Estructura</div></div>';
+        for (const it of items) {
+            const k = String(it.concepto || '').trim().toLowerCase();
+            const prevIt = k ? prevByConcepto[k] : null;
+            const delta = prevIt ? (Number(it.montoARS) || 0) - (Number(prevIt.montoARS) || 0) : null;
+            let deltaTxt = '<span style="color:#666;">— (nuevo)</span>';
+            if (delta !== null) {
+                if (delta > 0) deltaTxt = '<span style="color:#ff7070;font-weight:800;">▲ ' + _gfFmt(delta) + '</span>';
+                else if (delta < 0) deltaTxt = '<span style="color:#66ff99;font-weight:800;">▼ ' + _gfFmt(Math.abs(delta)) + '</span>';
+                else deltaTxt = '<span style="color:#aaa;">= sin cambio</span>';
+            }
+            const idx = Number(it.estructuraIdx);
+            const estrucLbl = (idx >= 0 && idx <= 2) ? estrucs[idx] : '— sin estructura —';
+            h += '<div style="display:grid;grid-template-columns:' + cols + ';gap:6px;font-size:11px;padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.04);">';
+            h += '<div style="color:#fff;font-weight:700;">' + escapeHtml(it.concepto || '—') + (it.nota ? '<br><span style="color:#888;font-size:9.5px;">' + escapeHtml(it.nota) + '</span>' : '') + '</div>';
+            h += '<div style="color:#aaa;">' + (it.moneda === 'usdt' ? 'USDT' : 'Pesos') + '</div>';
+            h += '<div style="color:#fff;font-weight:700;">' + (it.moneda === 'usdt' ? 'U$D ' + Number(it.monto || 0).toLocaleString('es-AR') : _gfFmt(it.monto)) + '</div>';
+            h += '<div style="color:' + cfg.color + ';font-weight:800;">' + _gfFmt(it.montoARS) + '</div>';
+            h += '<div>' + deltaTxt + '</div>';
+            h += '<div style="color:#aaa;">' + escapeHtml(estrucLbl) + '</div>';
+            h += '</div>';
+        }
+        h += '</div></div>';
+    }
+
+    // Desglose por estructura.
+    h += '<div style="margin-top:14px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.10);font-size:11px;display:flex;gap:14px;flex-wrap:wrap;justify-content:flex-end;">';
+    const tBE = Array.isArray(c.totalByEstructura) ? c.totalByEstructura : [0,0,0];
+    for (let i = 0; i < 3; i++) {
+        if (tBE[i] > 0) h += '<div style="color:#aaa;">' + escapeHtml(estrucs[i]) + ': <strong style="color:#fff;">' + _gfFmt(tBE[i]) + '</strong></div>';
+    }
+    if ((c.totalSinEstructuraARS || 0) > 0) h += '<div style="color:#aaa;">Sin estructura: <strong style="color:#fff;">' + _gfFmt(c.totalSinEstructuraARS) + '</strong></div>';
+    h += '<div style="color:' + cfg.color + ';font-weight:900;">Total: ' + _gfFmt(c.totalARS) + '</div>';
+    h += '</div>';
+
+    h += '</div>';
+    modal.innerHTML = h;
+    document.body.appendChild(modal);
+    modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
 }
 
 // ============================================================

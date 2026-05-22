@@ -2307,6 +2307,8 @@ const EmployeeClosing = require('./src/models/EmployeeClosing');
 const Publicista = require('./src/models/Publicista');
 const GastoFijo = require('./src/models/GastoFijo');
 const GastoInterno = require('./src/models/GastoInterno');
+const GastoFijoClosing = require('./src/models/GastoFijoClosing');
+const GastoInternoClosing = require('./src/models/GastoInternoClosing');
 const EMP_DELETE_PIN = '1818';
 const EMP_SECTORS = ['ganamos', 'publicidad', 'buffalo'];
 const EMP_FRANCO_DAYS = ['lunes', 'martes', 'miercoles', 'jueves', 'viernes', 'sabado', 'domingo'];
@@ -2342,8 +2344,10 @@ const EmployeeClosingCrazy        = _crazyModel(EmployeeClosing, 'EmployeeClosin
 const PublicistaCrazy             = _crazyModel(Publicista, 'PublicistaCrazy', 'publicistas_crazy');
 const GastoFijoCrazy              = _crazyModel(GastoFijo, 'GastoFijoCrazy', 'gastosfijos_crazy');
 const GastoInternoCrazy           = _crazyModel(GastoInterno, 'GastoInternoCrazy', 'gastosinternos_crazy');
+const GastoFijoClosingCrazy       = _crazyModel(GastoFijoClosing, 'GastoFijoClosingCrazy', 'gastosfijos_closings_crazy');
+const GastoInternoClosingCrazy    = _crazyModel(GastoInternoClosing, 'GastoInternoClosingCrazy', 'gastosinternos_closings_crazy');
 
-const _MODELS_MAIN = { ClosingEntry, CotizacionEntry, CotizacionExternaEntry, EmployeeEntry, EmployeeSectorConfig, EmployeeClosing, Publicista, GastoFijo, GastoInterno };
+const _MODELS_MAIN = { ClosingEntry, CotizacionEntry, CotizacionExternaEntry, EmployeeEntry, EmployeeSectorConfig, EmployeeClosing, Publicista, GastoFijo, GastoInterno, GastoFijoClosing, GastoInternoClosing };
 const _MODELS_CRAZY = {
   ClosingEntry: ClosingEntryCrazy,
   CotizacionEntry: CotizacionEntryCrazy,
@@ -2353,7 +2357,9 @@ const _MODELS_CRAZY = {
   EmployeeClosing: EmployeeClosingCrazy,
   Publicista: PublicistaCrazy,
   GastoFijo: GastoFijoCrazy,
-  GastoInterno: GastoInternoCrazy
+  GastoInterno: GastoInternoCrazy,
+  GastoFijoClosing: GastoFijoClosingCrazy,
+  GastoInternoClosing: GastoInternoClosingCrazy
 };
 
 // Tenant del request: 'crazy' para el login crazy, 'main' para el resto.
@@ -3013,6 +3019,204 @@ app.delete('/api/admin/gastos-internos/:id', authMiddleware, adminMiddleware, as
     res.json({ success: true });
   } catch (err) {
     logger.error(`DELETE /api/admin/gastos-internos/:id: ${err.stack || err.message}`);
+    res.status(500).json({ error: 'Error del servidor — ' + (err.message || 'desconocido') });
+  }
+});
+
+// ============================================
+// CIERRES DE GASTOS (fijos + internos) — historial mensual con paid toggle
+// ============================================
+// Al cerrar:
+//  - Snapshot de los ítems vivos (concepto, montos, estructura).
+//  - Los ítems vivos NO se borran: quedan como base del mes siguiente.
+// PINs: gastos fijos cierra con 1818, internos con 100.
+
+function _gastoToARS(g) {
+  const m = Number(g.monto) || 0;
+  if (g.moneda === 'usdt') return m * (Number(g.usdtRate) || 0);
+  return m;
+}
+function _periodLabelDefault() {
+  const meses = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
+  const arStr = new Date().toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires' });
+  const ar = new Date(arStr);
+  return meses[ar.getMonth()] + ' ' + ar.getFullYear();
+}
+// Snapshotea los items vivos del modelo dado, computa totales y guarda
+// el closing en su colección de historial.
+async function _crearCierreGasto(req, ModelVivo, ModelClosing, estructurasGetter, prefix) {
+  const items = await ModelVivo.find({ active: true }).lean();
+  const estructuras = await estructurasGetter(req);
+  const totalByEstructura = [0, 0, 0];
+  let totalSinEstructuraARS = 0, totalARS = 0;
+  const itemsSnapshot = items.map(g => {
+    const ars = _gastoToARS(g);
+    totalARS += ars;
+    const idx = Number(g.estructuraIdx);
+    if (idx >= 0 && idx <= 2) totalByEstructura[idx] += ars;
+    else totalSinEstructuraARS += ars;
+    return {
+      concepto: g.concepto || '',
+      moneda: g.moneda || 'pesos',
+      monto: Number(g.monto) || 0,
+      usdtRate: Number(g.usdtRate) || 0,
+      estructuraIdx: Number.isFinite(g.estructuraIdx) ? g.estructuraIdx : -1,
+      nota: g.nota || '',
+      montoARS: ars
+    };
+  });
+  const periodLabel = String((req.body && req.body.periodLabel) || _periodLabelDefault()).trim().slice(0, 80);
+  const closing = await ModelClosing.create({
+    id: `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    periodLabel,
+    closedAt: new Date(),
+    closedBy: (req.user && req.user.username) || '',
+    items: itemsSnapshot,
+    itemCount: itemsSnapshot.length,
+    estructuras,
+    totalARS, totalByEstructura, totalSinEstructuraARS
+  });
+  return closing;
+}
+function _summaryCierre(c) {
+  return {
+    id: c.id, periodLabel: c.periodLabel, closedAt: c.closedAt,
+    closedBy: c.closedBy, paid: c.paid, paidAt: c.paidAt, paidBy: c.paidBy,
+    itemCount: c.itemCount, totalARS: c.totalARS
+  };
+}
+
+// --- GASTOS FIJOS cierres (PIN 1818) ---
+app.post('/api/admin/gastos-fijos/cierre', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const pin = String((req.body && req.body.pin) || '');
+    if (pin !== '1818') return res.status(403).json({ error: 'PIN incorrecto' });
+    const { GastoFijo, GastoFijoClosing } = _models(req);
+    const c = await _crearCierreGasto(req, GastoFijo, GastoFijoClosing, _getGastoFijoEstructuras, 'gfc');
+    logger.info(`[gastos-fijos] cierre ${c.id} por ${(req.user && req.user.username) || '?'} — ${c.itemCount} items · total $${c.totalARS}`);
+    res.json({ success: true, id: c.id, itemCount: c.itemCount, totalARS: c.totalARS });
+  } catch (err) {
+    logger.error(`POST /api/admin/gastos-fijos/cierre: ${err.stack || err.message}`);
+    res.status(500).json({ error: 'Error del servidor — ' + (err.message || 'desconocido') });
+  }
+});
+
+app.get('/api/admin/gastos-fijos/cierres', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const { GastoFijoClosing } = _models(req);
+    const list = await GastoFijoClosing.find({}, { items: 0 }).sort({ closedAt: -1 }).lean();
+    res.json({ success: true, items: list.map(_summaryCierre) });
+  } catch (err) {
+    logger.error(`GET /api/admin/gastos-fijos/cierres: ${err.stack || err.message}`);
+    res.status(500).json({ error: 'Error del servidor — ' + (err.message || 'desconocido') });
+  }
+});
+
+// Detalle de un cierre + el cierre anterior (para mostrar deltas).
+app.get('/api/admin/gastos-fijos/cierres/:id', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const { GastoFijoClosing } = _models(req);
+    const c = await GastoFijoClosing.findOne({ id: req.params.id }).lean();
+    if (!c) return res.status(404).json({ error: 'Cierre no encontrado' });
+    const prev = await GastoFijoClosing.findOne({ closedAt: { $lt: c.closedAt } }).sort({ closedAt: -1 }).lean();
+    res.json({ success: true, item: c, previous: prev || null });
+  } catch (err) {
+    logger.error(`GET /api/admin/gastos-fijos/cierres/:id: ${err.stack || err.message}`);
+    res.status(500).json({ error: 'Error del servidor — ' + (err.message || 'desconocido') });
+  }
+});
+
+app.post('/api/admin/gastos-fijos/cierres/:id/paid', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const { GastoFijoClosing } = _models(req);
+    const paid = !!(req.body && req.body.paid);
+    const set = { paid, paidAt: paid ? new Date() : null, paidBy: paid ? ((req.user && req.user.username) || '') : '' };
+    const r = await GastoFijoClosing.updateOne({ id: req.params.id }, { $set: set });
+    if (!r.matchedCount) return res.status(404).json({ error: 'Cierre no encontrado' });
+    res.json({ success: true, paid });
+  } catch (err) {
+    logger.error(`POST /api/admin/gastos-fijos/cierres/:id/paid: ${err.stack || err.message}`);
+    res.status(500).json({ error: 'Error del servidor — ' + (err.message || 'desconocido') });
+  }
+});
+
+app.delete('/api/admin/gastos-fijos/cierres/:id', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const pin = String((req.query && req.query.pin) || (req.body && req.body.pin) || '');
+    if (pin !== '1818') return res.status(403).json({ error: 'PIN incorrecto' });
+    const { GastoFijoClosing } = _models(req);
+    const r = await GastoFijoClosing.deleteOne({ id: req.params.id });
+    if (!r.deletedCount) return res.status(404).json({ error: 'Cierre no encontrado' });
+    res.json({ success: true });
+  } catch (err) {
+    logger.error(`DELETE /api/admin/gastos-fijos/cierres/:id: ${err.stack || err.message}`);
+    res.status(500).json({ error: 'Error del servidor — ' + (err.message || 'desconocido') });
+  }
+});
+
+// --- GASTOS INTERNOS cierres (PIN 100) ---
+app.post('/api/admin/gastos-internos/cierre', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const pin = String((req.body && req.body.pin) || '');
+    if (pin !== '100') return res.status(403).json({ error: 'PIN incorrecto' });
+    const { GastoInterno, GastoInternoClosing } = _models(req);
+    const c = await _crearCierreGasto(req, GastoInterno, GastoInternoClosing, _getGastoInternoEstructuras, 'gic');
+    logger.info(`[gastos-internos] cierre ${c.id} por ${(req.user && req.user.username) || '?'} — ${c.itemCount} items · total $${c.totalARS}`);
+    res.json({ success: true, id: c.id, itemCount: c.itemCount, totalARS: c.totalARS });
+  } catch (err) {
+    logger.error(`POST /api/admin/gastos-internos/cierre: ${err.stack || err.message}`);
+    res.status(500).json({ error: 'Error del servidor — ' + (err.message || 'desconocido') });
+  }
+});
+
+app.get('/api/admin/gastos-internos/cierres', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const { GastoInternoClosing } = _models(req);
+    const list = await GastoInternoClosing.find({}, { items: 0 }).sort({ closedAt: -1 }).lean();
+    res.json({ success: true, items: list.map(_summaryCierre) });
+  } catch (err) {
+    logger.error(`GET /api/admin/gastos-internos/cierres: ${err.stack || err.message}`);
+    res.status(500).json({ error: 'Error del servidor — ' + (err.message || 'desconocido') });
+  }
+});
+
+app.get('/api/admin/gastos-internos/cierres/:id', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const { GastoInternoClosing } = _models(req);
+    const c = await GastoInternoClosing.findOne({ id: req.params.id }).lean();
+    if (!c) return res.status(404).json({ error: 'Cierre no encontrado' });
+    const prev = await GastoInternoClosing.findOne({ closedAt: { $lt: c.closedAt } }).sort({ closedAt: -1 }).lean();
+    res.json({ success: true, item: c, previous: prev || null });
+  } catch (err) {
+    logger.error(`GET /api/admin/gastos-internos/cierres/:id: ${err.stack || err.message}`);
+    res.status(500).json({ error: 'Error del servidor — ' + (err.message || 'desconocido') });
+  }
+});
+
+app.post('/api/admin/gastos-internos/cierres/:id/paid', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const { GastoInternoClosing } = _models(req);
+    const paid = !!(req.body && req.body.paid);
+    const set = { paid, paidAt: paid ? new Date() : null, paidBy: paid ? ((req.user && req.user.username) || '') : '' };
+    const r = await GastoInternoClosing.updateOne({ id: req.params.id }, { $set: set });
+    if (!r.matchedCount) return res.status(404).json({ error: 'Cierre no encontrado' });
+    res.json({ success: true, paid });
+  } catch (err) {
+    logger.error(`POST /api/admin/gastos-internos/cierres/:id/paid: ${err.stack || err.message}`);
+    res.status(500).json({ error: 'Error del servidor — ' + (err.message || 'desconocido') });
+  }
+});
+
+app.delete('/api/admin/gastos-internos/cierres/:id', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const pin = String((req.query && req.query.pin) || (req.body && req.body.pin) || '');
+    if (pin !== '100') return res.status(403).json({ error: 'PIN incorrecto' });
+    const { GastoInternoClosing } = _models(req);
+    const r = await GastoInternoClosing.deleteOne({ id: req.params.id });
+    if (!r.deletedCount) return res.status(404).json({ error: 'Cierre no encontrado' });
+    res.json({ success: true });
+  } catch (err) {
+    logger.error(`DELETE /api/admin/gastos-internos/cierres/:id: ${err.stack || err.message}`);
     res.status(500).json({ error: 'Error del servidor — ' + (err.message || 'desconocido') });
   }
 });
