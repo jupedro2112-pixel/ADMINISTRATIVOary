@@ -5352,7 +5352,16 @@ function _renderHistorialGastos(cierres, kind) {
             h += '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;background:rgba(0,0,0,0.30);border:1px solid ' + borderCol + ';border-radius:8px;padding:8px 11px;margin-bottom:6px;">';
             h += '<div style="min-width:0;flex:1;">';
             h += '<div style="color:#fff;font-weight:800;font-size:12.5px;">' + escapeHtml(c.periodLabel || fch || 'Cierre') + (pagado ? ' <span style="color:#66ff66;font-size:10.5px;">✅ PAGADO</span>' : ' <span style="color:#ffaa66;font-size:10.5px;">⏳ SIN PAGAR</span>') + '</div>';
-            h += '<div style="color:#888;font-size:10.5px;">' + escapeHtml(fch) + ' · ' + (c.itemCount || 0) + ' ítems · <strong style="color:' + cfg.color + ';">' + _gfFmt(c.totalARS || 0) + '</strong></div>';
+            h += '<div style="color:#888;font-size:10.5px;">' + escapeHtml(fch) + ' · ' + (c.itemCount || 0) + ' ítems · <strong style="color:' + cfg.color + ';">' + _gfFmt(c.totalARS || 0) + '</strong>';
+            // Resumen de extras (si los hay) — viene del summary del backend.
+            if (c.extrasCount && c.extrasCount > 0) {
+                const pendientes = (c.extrasCount - (c.extrasPaidCount || 0));
+                const extraTxt = pendientes > 0
+                    ? ' · <span style="color:#ffaa66;">+ ' + c.extrasCount + ' extra(s) · ' + pendientes + ' sin pagar</span>'
+                    : ' · <span style="color:#66ff99;">+ ' + c.extrasCount + ' extra(s) ✅</span>';
+                h += extraTxt;
+            }
+            h += '</div>';
             h += '</div>';
             h += '<div style="display:flex;gap:5px;flex-wrap:wrap;">';
             h += '<label style="display:flex;align-items:center;gap:4px;font-size:11px;color:#fff;cursor:pointer;background:rgba(255,255,255,0.04);padding:4px 9px;border-radius:6px;"><input type="checkbox" ' + (pagado ? 'checked' : '') + ' onchange="toggleCierreGastoPaid(\'' + kind + '\',\'' + escapeHtml(c.id) + '\', this.checked)"> Pagado</label>';
@@ -5511,13 +5520,119 @@ function _mostrarModalCierreGasto(kind, c, prev) {
         if (tBE[i] > 0) h += '<div style="color:#aaa;">' + escapeHtml(estrucs[i]) + ': <strong style="color:#fff;">' + _gfFmt(tBE[i]) + '</strong></div>';
     }
     if ((c.totalSinEstructuraARS || 0) > 0) h += '<div style="color:#aaa;">Sin estructura: <strong style="color:#fff;">' + _gfFmt(c.totalSinEstructuraARS) + '</strong></div>';
-    h += '<div style="color:' + cfg.color + ';font-weight:900;">Total: ' + _gfFmt(c.totalARS) + '</div>';
+    h += '<div style="color:' + cfg.color + ';font-weight:900;">Total cierre: ' + _gfFmt(c.totalARS) + '</div>';
+    h += '</div>';
+
+    // === Sección EXTRAS — gastos agregados después del cierre ===
+    const extras = Array.isArray(c.extras) ? c.extras : [];
+    const extrasTotal = extras.reduce((s, e) => s + (Number(e.montoARS) || 0), 0);
+    const extrasPagados = extras.filter(e => e.paid).reduce((s, e) => s + (Number(e.montoARS) || 0), 0);
+    const extrasPendientes = extrasTotal - extrasPagados;
+    h += '<div style="margin-top:18px;padding:12px;background:rgba(255,170,102,0.06);border:1.5px solid rgba(255,170,102,0.40);border-radius:10px;">';
+    h += '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px;">';
+    h += '<span style="color:#ffaa66;font-weight:900;font-size:12px;letter-spacing:0.4px;">💸 EXTRAS AGREGADOS DESPUÉS DEL CIERRE (' + extras.length + ')</span>';
+    h += '<button onclick="addExtraCierre(\'' + kind + '\',\'' + escapeHtml(c.id) + '\')" style="background:linear-gradient(135deg,#d4a040,#ffaa66);color:#000;border:none;padding:5px 13px;border-radius:6px;font-weight:900;font-size:11px;cursor:pointer;">➕ Agregar extra</button>';
+    h += '</div>';
+    if (extras.length === 0) {
+        h += '<div style="color:#888;font-size:11px;font-style:italic;padding:6px 2px;">Sin extras. Si surge un gasto extra después de haber cerrado el mes, agregalo acá — el bloque original queda intacto.</div>';
+    } else {
+        const colsExt = '1.5fr 100px 110px 1fr 110px 26px';
+        h += '<div style="overflow-x:auto;"><div style="min-width:680px;">';
+        h += '<div style="display:grid;grid-template-columns:' + colsExt + ';gap:6px;font-size:9px;color:#888;text-transform:uppercase;font-weight:700;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.10);">';
+        h += '<div>Concepto</div><div>Moneda</div><div>Monto</div><div>Equiv. ARS</div><div>Estado</div><div></div></div>';
+        for (const e of extras) {
+            const eid = escapeHtml(e.id);
+            const idxE = Number(e.estructuraIdx);
+            const estLbl = (idxE >= 0 && idxE <= 2) ? estrucs[idxE] : '—';
+            const addedTxt = e.addedAt ? new Date(e.addedAt).toLocaleDateString('es-AR') : '';
+            h += '<div style="display:grid;grid-template-columns:' + colsExt + ';gap:6px;font-size:11px;padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.04);align-items:center;">';
+            h += '<div style="color:#fff;font-weight:700;">' + escapeHtml(e.concepto || '—') + '<br><span style="color:#888;font-size:9.5px;">' + escapeHtml(estLbl) + (addedTxt ? ' · agregado ' + escapeHtml(addedTxt) : '') + (e.nota ? ' · ' + escapeHtml(e.nota) : '') + '</span></div>';
+            h += '<div style="color:#aaa;">' + (e.moneda === 'usdt' ? 'USDT' : 'Pesos') + '</div>';
+            h += '<div style="color:#fff;font-weight:700;">' + (e.moneda === 'usdt' ? 'U$D ' + Number(e.monto || 0).toLocaleString('es-AR') : _gfFmt(e.monto)) + '</div>';
+            h += '<div style="color:#ffaa66;font-weight:800;">' + _gfFmt(e.montoARS) + '</div>';
+            h += '<div><label style="display:flex;align-items:center;gap:5px;cursor:pointer;color:' + (e.paid ? '#66ff66' : '#ffaa66') + ';font-weight:700;font-size:10.5px;"><input type="checkbox" ' + (e.paid ? 'checked' : '') + ' onchange="toggleExtraPaid(\'' + kind + '\',\'' + escapeHtml(c.id) + '\',\'' + eid + '\', this.checked)"> ' + (e.paid ? 'Pagado' : 'Sin pagar') + '</label></div>';
+            h += '<button onclick="delExtraCierre(\'' + kind + '\',\'' + escapeHtml(c.id) + '\',\'' + eid + '\')" title="Borrar extra (PIN)" style="background:rgba(255,80,80,0.10);color:#f55;border:1px solid rgba(255,80,80,0.30);border-radius:5px;cursor:pointer;font-size:10px;padding:4px 6px;">✕</button>';
+            h += '</div>';
+        }
+        h += '</div></div>';
+        h += '<div style="display:flex;gap:14px;flex-wrap:wrap;justify-content:flex-end;font-size:11px;margin-top:8px;padding-top:6px;border-top:1px dashed rgba(255,170,102,0.30);">';
+        h += '<div style="color:#aaa;">Pagados: <strong style="color:#66ff99;">' + _gfFmt(extrasPagados) + '</strong></div>';
+        h += '<div style="color:#aaa;">Pendientes: <strong style="color:#ffaa66;">' + _gfFmt(extrasPendientes) + '</strong></div>';
+        h += '<div style="color:#ffaa66;font-weight:900;">Total extras: ' + _gfFmt(extrasTotal) + '</div>';
+        h += '</div>';
+    }
+    h += '</div>';
+
+    // Total combinado del mes (cierre + extras).
+    h += '<div style="margin-top:12px;padding:10px 12px;background:rgba(0,0,0,0.40);border-radius:8px;font-size:12px;display:flex;justify-content:flex-end;gap:14px;flex-wrap:wrap;">';
+    h += '<div style="color:#aaa;">Cierre original: ' + _gfFmt(c.totalARS) + '</div>';
+    if (extras.length > 0) h += '<div style="color:#aaa;">+ extras: ' + _gfFmt(extrasTotal) + '</div>';
+    h += '<div style="color:#d4af37;font-weight:900;font-size:13px;">TOTAL MES: ' + _gfFmt((c.totalARS || 0) + extrasTotal) + '</div>';
     h += '</div>';
 
     h += '</div>';
     modal.innerHTML = h;
     document.body.appendChild(modal);
     modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
+}
+
+// Agregar/tildar/borrar extras del cierre.
+async function addExtraCierre(kind, cierreId) {
+    const cfg = _GASTO_KIND_CFG[kind];
+    const concepto = ((prompt('Concepto del extra:') || '').trim()).slice(0, 100);
+    if (!concepto) return;
+    const monedaRaw = (prompt('Moneda — pesos o usdt (default pesos):', 'pesos') || '').trim().toLowerCase();
+    const moneda = (monedaRaw === 'usdt') ? 'usdt' : 'pesos';
+    const monto = Number(prompt('Monto en ' + (moneda === 'usdt' ? 'USDT' : 'pesos') + ':', '0')) || 0;
+    let usdtRate = 0;
+    if (moneda === 'usdt') usdtRate = Number(prompt('Cotización USDT (ARS por 1 USDT):', '0')) || 0;
+    const nota = ((prompt('Nota (opcional):') || '').trim()).slice(0, 200);
+    try {
+        const r = await authFetch(cfg.base + '/' + encodeURIComponent(cierreId) + '/extras', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ concepto, moneda, monto, usdtRate, nota, estructuraIdx: -1 })
+        });
+        const d = await r.json();
+        if (!r.ok || !d.success) { showToast(d.error || 'Error', 'error'); return; }
+        showToast('➕ Extra agregado', 'success');
+        // Recargar el modal con los nuevos datos.
+        document.getElementById('cierreGastoModal')?.remove();
+        await verCierreGasto(kind, cierreId);
+        if (kind === 'fijos') loadGastosFijos(); else loadGastosInternos();
+    } catch (e) { showToast('Error de conexión', 'error'); }
+}
+
+async function toggleExtraPaid(kind, cierreId, extraId, paid) {
+    const cfg = _GASTO_KIND_CFG[kind];
+    try {
+        const r = await authFetch(cfg.base + '/' + encodeURIComponent(cierreId) + '/extras/' + encodeURIComponent(extraId) + '/paid', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ paid })
+        });
+        const d = await r.json();
+        if (!r.ok || !d.success) { showToast(d.error || 'Error', 'error'); return; }
+        showToast(paid ? '✅ Extra pagado' : '⏳ Extra sin pagar', 'success');
+        document.getElementById('cierreGastoModal')?.remove();
+        await verCierreGasto(kind, cierreId);
+        if (kind === 'fijos') loadGastosFijos(); else loadGastosInternos();
+    } catch (e) { showToast('Error de conexión', 'error'); }
+}
+
+async function delExtraCierre(kind, cierreId, extraId) {
+    const cfg = _GASTO_KIND_CFG[kind];
+    if (!confirm('¿Borrar este extra?')) return;
+    const pin = prompt('PIN para borrar:');
+    if (pin == null) return;
+    if (!pin) { showToast('PIN requerido', 'error'); return; }
+    try {
+        const r = await authFetch(cfg.base + '/' + encodeURIComponent(cierreId) + '/extras/' + encodeURIComponent(extraId) + '?pin=' + encodeURIComponent(pin), { method: 'DELETE' });
+        const d = await r.json();
+        if (!r.ok || !d.success) { showToast(d.error || 'Error', 'error'); return; }
+        showToast('🗑 Extra borrado', 'success');
+        document.getElementById('cierreGastoModal')?.remove();
+        await verCierreGasto(kind, cierreId);
+        if (kind === 'fijos') loadGastosFijos(); else loadGastosInternos();
+    } catch (e) { showToast('Error de conexión', 'error'); }
 }
 
 // ============================================================

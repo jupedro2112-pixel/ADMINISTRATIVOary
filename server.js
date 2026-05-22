@@ -3079,10 +3079,15 @@ async function _crearCierreGasto(req, ModelVivo, ModelClosing, estructurasGetter
   return closing;
 }
 function _summaryCierre(c) {
+  const extras = Array.isArray(c.extras) ? c.extras : [];
+  const extrasPaidCount = extras.filter(e => e && e.paid).length;
+  const extrasTotalARS = extras.reduce((s, e) => s + (Number(e && e.montoARS) || 0), 0);
+  const extrasPagadosARS = extras.filter(e => e && e.paid).reduce((s, e) => s + (Number(e.montoARS) || 0), 0);
   return {
     id: c.id, periodLabel: c.periodLabel, closedAt: c.closedAt,
     closedBy: c.closedBy, paid: c.paid, paidAt: c.paidAt, paidBy: c.paidBy,
-    itemCount: c.itemCount, totalARS: c.totalARS
+    itemCount: c.itemCount, totalARS: c.totalARS,
+    extrasCount: extras.length, extrasPaidCount, extrasTotalARS, extrasPagadosARS
   };
 }
 
@@ -3154,6 +3159,80 @@ app.delete('/api/admin/gastos-fijos/cierres/:id', authMiddleware, adminMiddlewar
   }
 });
 
+// Extras de un cierre — handlers genéricos que reusan los dos endpoints.
+async function _addExtraCierre(req, res, ModelClosing) {
+  try {
+    const id = String(req.params.id || '');
+    const b = req.body || {};
+    const concepto = String(b.concepto || '').trim().slice(0, 100);
+    if (!concepto) return res.status(400).json({ error: 'Concepto requerido' });
+    const moneda = (b.moneda === 'usdt') ? 'usdt' : 'pesos';
+    const monto = Math.max(0, Number(b.monto) || 0);
+    const usdtRate = Math.max(0, Number(b.usdtRate) || 0);
+    const estructuraIdx = _normEstructuraIdx(b.estructuraIdx);
+    const nota = String(b.nota || '').trim().slice(0, 200);
+    const montoARS = (moneda === 'usdt') ? monto * usdtRate : monto;
+    const extra = {
+      id: `ext_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      concepto, moneda, monto, usdtRate, estructuraIdx, nota, montoARS,
+      paid: false, paidAt: null, paidBy: '',
+      addedAt: new Date(),
+      addedBy: (req.user && req.user.username) || ''
+    };
+    const r = await ModelClosing.updateOne({ id }, { $push: { extras: extra } });
+    if (!r.matchedCount) return res.status(404).json({ error: 'Cierre no encontrado' });
+    res.json({ success: true, item: extra });
+  } catch (err) {
+    logger.error(`addExtra: ${err.stack || err.message}`);
+    res.status(500).json({ error: 'Error del servidor — ' + (err.message || 'desconocido') });
+  }
+}
+async function _toggleExtraPaid(req, res, ModelClosing) {
+  try {
+    const id = String(req.params.id || '');
+    const extraId = String(req.params.extraId || '');
+    const paid = !!(req.body && req.body.paid);
+    const r = await ModelClosing.updateOne(
+      { id, 'extras.id': extraId },
+      { $set: {
+          'extras.$.paid': paid,
+          'extras.$.paidAt': paid ? new Date() : null,
+          'extras.$.paidBy': paid ? ((req.user && req.user.username) || '') : ''
+      } }
+    );
+    if (!r.matchedCount) return res.status(404).json({ error: 'Cierre o extra no encontrado' });
+    res.json({ success: true, paid });
+  } catch (err) {
+    logger.error(`toggleExtraPaid: ${err.stack || err.message}`);
+    res.status(500).json({ error: 'Error del servidor — ' + (err.message || 'desconocido') });
+  }
+}
+async function _deleteExtra(req, res, ModelClosing, pinEsperado) {
+  try {
+    const pin = String((req.query && req.query.pin) || (req.body && req.body.pin) || '');
+    if (pin !== pinEsperado) return res.status(403).json({ error: 'PIN incorrecto' });
+    const id = String(req.params.id || '');
+    const extraId = String(req.params.extraId || '');
+    const r = await ModelClosing.updateOne({ id }, { $pull: { extras: { id: extraId } } });
+    if (!r.matchedCount) return res.status(404).json({ error: 'Cierre no encontrado' });
+    res.json({ success: true });
+  } catch (err) {
+    logger.error(`deleteExtra: ${err.stack || err.message}`);
+    res.status(500).json({ error: 'Error del servidor — ' + (err.message || 'desconocido') });
+  }
+}
+
+// Extras gastos fijos (PIN 1818 para borrar; agregar/tildar sin PIN)
+app.post('/api/admin/gastos-fijos/cierres/:id/extras', authMiddleware, adminMiddleware, async (req, res) => {
+  await _addExtraCierre(req, res, _models(req).GastoFijoClosing);
+});
+app.post('/api/admin/gastos-fijos/cierres/:id/extras/:extraId/paid', authMiddleware, adminMiddleware, async (req, res) => {
+  await _toggleExtraPaid(req, res, _models(req).GastoFijoClosing);
+});
+app.delete('/api/admin/gastos-fijos/cierres/:id/extras/:extraId', authMiddleware, adminMiddleware, async (req, res) => {
+  await _deleteExtra(req, res, _models(req).GastoFijoClosing, '1818');
+});
+
 // --- GASTOS INTERNOS cierres (PIN 100) ---
 app.post('/api/admin/gastos-internos/cierre', authMiddleware, adminMiddleware, async (req, res) => {
   try {
@@ -3219,6 +3298,17 @@ app.delete('/api/admin/gastos-internos/cierres/:id', authMiddleware, adminMiddle
     logger.error(`DELETE /api/admin/gastos-internos/cierres/:id: ${err.stack || err.message}`);
     res.status(500).json({ error: 'Error del servidor — ' + (err.message || 'desconocido') });
   }
+});
+
+// Extras gastos internos (PIN 100 para borrar; agregar/tildar sin PIN)
+app.post('/api/admin/gastos-internos/cierres/:id/extras', authMiddleware, adminMiddleware, async (req, res) => {
+  await _addExtraCierre(req, res, _models(req).GastoInternoClosing);
+});
+app.post('/api/admin/gastos-internos/cierres/:id/extras/:extraId/paid', authMiddleware, adminMiddleware, async (req, res) => {
+  await _toggleExtraPaid(req, res, _models(req).GastoInternoClosing);
+});
+app.delete('/api/admin/gastos-internos/cierres/:id/extras/:extraId', authMiddleware, adminMiddleware, async (req, res) => {
+  await _deleteExtra(req, res, _models(req).GastoInternoClosing, '100');
 });
 
 // ============================================
