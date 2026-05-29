@@ -1060,6 +1060,47 @@ const CLOSING_LOCK_HOURS = 24;
 // Cantidad de equipos por sector en los cierres (slots 0..N-1).
 const BUFFALO_TEAM_SLOTS = 10;
 
+// ============================================
+// RETRY ANTE ERRORES TRANSITORIOS DE MONGO (failover de Atlas)
+// ============================================
+// Cuando Atlas cambia de primario (mantenimiento, reinicio, blip de red) el
+// driver queda un instante con la topología vieja y tira errores como
+// "primary marked stale due to electionId/setVersion mismatch" o
+// MongoServerSelectionError. El driver ya reintenta 1 sola vez por su cuenta
+// (retryable reads/writes), pero si la topología sigue asentándose ese único
+// reintento también falla y el error se filtra hasta el front (pantalla roja).
+// Estos errores son de SELECCIÓN de servidor: la operación nunca llegó a
+// ejecutarse, así que reintentarla es seguro (idempotente). Un backoff corto
+// extra le da tiempo al cluster a estabilizarse y vuelve el blip invisible.
+function _isTransientMongoError(err) {
+  if (!err) return false;
+  const msg = String(err.message || '');
+  const name = String(err.name || '');
+  if (name === 'MongoServerSelectionError' || name === 'MongoNetworkError' || name === 'MongoNetworkTimeoutError') return true;
+  if (typeof err.hasErrorLabel === 'function' &&
+      (err.hasErrorLabel('RetryableWriteError') || err.hasErrorLabel('TransientTransactionError'))) return true;
+  return /electionId|setVersion|marked stale|not master|notmaster|node is recovering|ECONNRESET|connection .* closed|socket/i.test(msg);
+}
+
+async function withMongoRetry(fn, { retries = 3, baseDelayMs = 250, label = 'mongo' } = {}) {
+  let lastErr;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (attempt < retries && _isTransientMongoError(err)) {
+        const delay = baseDelayMs * Math.pow(2, attempt); // 250, 500, 1000 ms
+        logger.warn(`[${label}] error transitorio de Mongo (intento ${attempt + 1}/${retries}): ${err.message} — reintentando en ${delay}ms`);
+        await new Promise(r => setTimeout(r, delay));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastErr;
+}
+
 function _closingComputeTotals(c) {
   const deposits = Number(c.depositsARS || 0);         // cargas totales (Σ de 7 equipos)
   // c.ventasARS guarda Σ DESCARGAS (cash-outs a clientes). El dueño definió
@@ -1195,7 +1236,10 @@ app.get('/api/admin/closings', authMiddleware, closingsAccessMiddleware, async (
     const projection = lite
       ? { 'comprobantes.url': 0, 'editHistory.before': 0, 'editHistory.after': 0 }
       : {};
-    const rows = await ClosingEntry.find(filter, projection).sort({ dateKey: -1, sector: 1, teamSlot: 1 }).lean();
+    const rows = await withMongoRetry(
+      () => ClosingEntry.find(filter, projection).sort({ dateKey: -1, sector: 1, teamSlot: 1 }).lean(),
+      { label: 'closings:list' }
+    );
     const enriched = rows.map(r => {
       const comprobantes = lite && Array.isArray(r.comprobantes)
         ? r.comprobantes.map(c => ({
@@ -1228,7 +1272,7 @@ app.get('/api/admin/closings/:id', authMiddleware, closingsAccessMiddleware, asy
   try {
     const { ClosingEntry } = _models(req);
     const id = String(req.params.id || '');
-    const r = await ClosingEntry.findOne({ id }).lean();
+    const r = await withMongoRetry(() => ClosingEntry.findOne({ id }).lean(), { label: 'closings:get' });
     if (!r) return res.status(404).json({ error: 'Cierre no encontrado' });
     res.json({
       success: true,
@@ -1303,7 +1347,10 @@ app.post('/api/admin/closings', authMiddleware, closingsAccessMiddleware, async 
     let pendienteAnterior = Number(b.pendienteAnteriorARS) || 0;
     if (!b.pendienteAnteriorARS && b.pendienteAnteriorARS !== 0) {
       const prevDateKey = new Date(new Date(dateKey).getTime() - 24 * 3600 * 1000).toISOString().slice(0, 10);
-      const prev = await ClosingEntry.findOne({ dateKey: prevDateKey, sector, teamSlot: null }, { comprobantes: 0, editHistory: 0 }).lean();
+      const prev = await withMongoRetry(
+        () => ClosingEntry.findOne({ dateKey: prevDateKey, sector, teamSlot: null }, { comprobantes: 0, editHistory: 0 }).lean(),
+        { label: 'closings:create:prev' }
+      );
       if (prev) {
         const c = _closingComputeTotals(prev);
         pendienteAnterior = c.pendienteHoy || 0;
@@ -1352,7 +1399,7 @@ app.post('/api/admin/closings', authMiddleware, closingsAccessMiddleware, async 
     }
 
     try {
-      const saved = await ClosingEntry.create(doc);
+      const saved = await withMongoRetry(() => ClosingEntry.create(doc), { label: 'closings:create' });
       res.json({
         success: true,
         row: { ...saved.toObject(), computed: _closingComputeTotals(saved), locked: false }
@@ -1378,7 +1425,10 @@ app.put('/api/admin/closings/:id', authMiddleware, closingsAccessMiddleware, asy
     // findOne SIN los campos pesados (comprobantes/editHistory pueden pesar
     // varios MB por las fotos base64). Solo necesitamos los escalares +
     // teams + estado para hacer el diff y el chequeo de bloqueo.
-    const c = await ClosingEntry.findOne({ id }, { comprobantes: 0, editHistory: 0 }).lean();
+    const c = await withMongoRetry(
+      () => ClosingEntry.findOne({ id }, { comprobantes: 0, editHistory: 0 }).lean(),
+      { label: 'closings:update:get' }
+    );
     if (!c) return res.status(404).json({ error: 'Cierre no encontrado' });
     if (_closingIsLocked(c)) {
       return res.status(403).json({
@@ -1446,10 +1496,10 @@ app.put('/api/admin/closings/:id', authMiddleware, closingsAccessMiddleware, asy
     // updateOne con $set/$push: Mongo modifica los campos en el lugar sin
     // reescribir el documento entero — rápido aunque el cierre tenga MB
     // de fotos en comprobantes.
-    await ClosingEntry.updateOne({ id }, {
+    await withMongoRetry(() => ClosingEntry.updateOne({ id }, {
       $set: setObj,
       $push: { editHistory: { $each: changes } }
-    });
+    }), { label: 'closings:update' });
     res.json({ success: true, changesCount: changes.length });
   } catch (err) {
     logger.error(`PUT /api/admin/closings/:id: ${err.stack || err.message}`);
@@ -1468,7 +1518,10 @@ app.post('/api/admin/closings/:id/confirm', authMiddleware, closingsAccessMiddle
     const id = String(req.params.id || '');
     // Sin las urls pesadas — el confirm sólo necesita los escalares y el
     // `kind` de los comprobantes (para el chequeo de foto del banco).
-    const c = await ClosingEntry.findOne({ id }, { 'comprobantes.url': 0, editHistory: 0 }).lean();
+    const c = await withMongoRetry(
+      () => ClosingEntry.findOne({ id }, { 'comprobantes.url': 0, editHistory: 0 }).lean(),
+      { label: 'closings:confirm:get' }
+    );
     if (!c) return res.status(404).json({ error: 'Cierre no encontrado' });
     if (c.status === 'confirmed') {
       return res.status(400).json({ error: 'Cierre ya estaba confirmado' });
@@ -1485,12 +1538,12 @@ app.post('/api/admin/closings/:id/confirm', authMiddleware, closingsAccessMiddle
       }
     }
     const now = new Date();
-    await ClosingEntry.updateOne({ id }, { $set: {
+    await withMongoRetry(() => ClosingEntry.updateOne({ id }, { $set: {
       status: 'confirmed',
       confirmedAt: now,
       confirmedBy: req.user.username || '',
       lockedAt: new Date(now.getTime() + CLOSING_LOCK_HOURS * 3600 * 1000)
-    } });
+    } }), { label: 'closings:confirm' });
     res.json({ success: true });
   } catch (err) {
     logger.error(`POST /api/admin/closings/:id/confirm: ${err.stack || err.message}`);
@@ -1504,7 +1557,10 @@ app.post('/api/admin/closings/:id/verify', authMiddleware, closingsAccessMiddlew
   try {
     const { ClosingEntry } = _models(req);
     const id = String(req.params.id || '');
-    const c = await ClosingEntry.findOne({ id }, { id: 1, status: 1, verifiedAt: 1 }).lean();
+    const c = await withMongoRetry(
+      () => ClosingEntry.findOne({ id }, { id: 1, status: 1, verifiedAt: 1 }).lean(),
+      { label: 'closings:verify:get' }
+    );
     if (!c) return res.status(404).json({ error: 'Cierre no encontrado' });
     if (c.status !== 'confirmed') {
       return res.status(400).json({ error: 'Confirmá el cierre antes de verificarlo' });
@@ -1512,10 +1568,10 @@ app.post('/api/admin/closings/:id/verify', authMiddleware, closingsAccessMiddlew
     const username = req.user.username || '';
     const turningOn = !c.verifiedAt;
     const hist = { editedAt: new Date(), editedBy: username, field: 'verified', before: !turningOn, after: turningOn };
-    await ClosingEntry.updateOne({ id }, {
+    await withMongoRetry(() => ClosingEntry.updateOne({ id }, {
       $set: { verifiedAt: turningOn ? new Date() : null, verifiedBy: turningOn ? username : '' },
       $push: { editHistory: hist }
-    });
+    }), { label: 'closings:verify' });
     res.json({ success: true, verified: turningOn });
   } catch (err) {
     logger.error(`POST verify: ${err.stack || err.message}`);
@@ -1531,7 +1587,10 @@ app.post('/api/admin/closings/:id/comprobante', authMiddleware, closingsAccessMi
     const id = String(req.params.id || '');
     // Solo traemos los campos del chequeo de bloqueo — sin los comprobantes
     // pesados — y agregamos la foto con un $push (no reescribe el doc).
-    const c = await ClosingEntry.findOne({ id }, { id: 1, status: 1, confirmedAt: 1 }).lean();
+    const c = await withMongoRetry(
+      () => ClosingEntry.findOne({ id }, { id: 1, status: 1, confirmedAt: 1 }).lean(),
+      { label: 'closings:comprobante:get' }
+    );
     if (!c) return res.status(404).json({ error: 'Cierre no encontrado' });
     if (_closingIsLocked(c)) {
       return res.status(403).json({ error: 'Cierre bloqueado por 24h', locked: true });
@@ -1553,14 +1612,14 @@ app.post('/api/admin/closings/:id/comprobante', authMiddleware, closingsAccessMi
     const note = String((req.body && req.body.note) || '').trim().slice(0, 200);
     const slotRaw = req.body && req.body.teamSlot;
     const teamSlot = (Number.isInteger(slotRaw) && slotRaw >= 0 && slotRaw < BUFFALO_TEAM_SLOTS) ? slotRaw : null;
-    await ClosingEntry.updateOne({ id }, {
+    await withMongoRetry(() => ClosingEntry.updateOne({ id }, {
       $push: {
         comprobantes: { url, kind, teamSlot, note, uploadedBy: req.user.username || '', uploadedAt: new Date() },
         // editHistory NO guarda la url — solo registra que se agregó una
         // foto. Guardar el base64 acá duplicaba la imagen e inflaba el doc.
         editHistory: { editedAt: new Date(), editedBy: req.user.username || '', field: 'comprobante_add', before: null, after: { kind, teamSlot } }
       }
-    });
+    }), { label: 'closings:comprobante:add' });
     res.json({ success: true });
   } catch (err) {
     logger.error(`POST comprobante: ${err.stack || err.message}`);
@@ -1575,7 +1634,10 @@ app.delete('/api/admin/closings/:id/comprobante/:idx', authMiddleware, closingsA
     const id = String(req.params.id || '');
     const idx = parseInt(req.params.idx, 10);
     // Traemos comprobantes + estado, SIN editHistory (puede pesar varios MB).
-    const c = await ClosingEntry.findOne({ id }, { comprobantes: 1, status: 1, confirmedAt: 1, id: 1 }).lean();
+    const c = await withMongoRetry(
+      () => ClosingEntry.findOne({ id }, { comprobantes: 1, status: 1, confirmedAt: 1, id: 1 }).lean(),
+      { label: 'closings:comprobante:del:get' }
+    );
     if (!c) return res.status(404).json({ error: 'Cierre no encontrado' });
     if (_closingIsLocked(c)) {
       return res.status(403).json({ error: 'Cierre bloqueado por 24h', locked: true });
@@ -1586,11 +1648,11 @@ app.delete('/api/admin/closings/:id/comprobante/:idx', authMiddleware, closingsA
     }
     const removed = comps[idx];
     const next = comps.filter((_, i) => i !== idx);
-    await ClosingEntry.updateOne({ id }, {
+    await withMongoRetry(() => ClosingEntry.updateOne({ id }, {
       $set: { comprobantes: next },
       // editHistory NO guarda la imagen — solo el tipo de comprobante sacado.
       $push: { editHistory: { editedAt: new Date(), editedBy: req.user.username || '', field: 'comprobante_remove', before: { kind: removed && removed.kind, teamSlot: removed && removed.teamSlot }, after: null } }
-    });
+    }), { label: 'closings:comprobante:del' });
     res.json({ success: true });
   } catch (err) {
     logger.error(`DELETE comprobante: ${err.stack || err.message}`);
@@ -1616,17 +1678,20 @@ app.delete('/api/admin/closings/:id', authMiddleware, closingsAccessMiddleware, 
     if (pin !== CLOSING_DELETE_PIN) {
       return res.status(403).json({ error: 'PIN incorrecto' });
     }
-    const c = await ClosingEntry.findOne(
-      { id },
-      { dateKey: 1, sector: 1, status: 1, depositsARS: 1, ventasARS: 1, bajadaARS: 1, id: 1 }
-    ).lean();
+    const c = await withMongoRetry(
+      () => ClosingEntry.findOne(
+        { id },
+        { dateKey: 1, sector: 1, status: 1, depositsARS: 1, ventasARS: 1, bajadaARS: 1, id: 1 }
+      ).lean(),
+      { label: 'closings:delete:get' }
+    );
     if (!c) return res.status(404).json({ error: 'Cierre no encontrado' });
     const snapshot = {
       dateKey: c.dateKey, sector: c.sector, status: c.status,
       depositsARS: c.depositsARS, ventasARS: c.ventasARS,
       bajadaARS: c.bajadaARS, deletedBy: req.user.username || ''
     };
-    await ClosingEntry.deleteOne({ id });
+    await withMongoRetry(() => ClosingEntry.deleteOne({ id }), { label: 'closings:delete' });
     logger.warn(`DELETE closing ${id} (PIN OK) by ${req.user.username}: ${JSON.stringify(snapshot)}`);
     res.json({ success: true });
   } catch (err) {
@@ -1650,7 +1715,10 @@ app.get('/api/admin/closings/summary', authMiddleware, closingsAccessMiddleware,
     if (sector) filter.sector = sector;
     // El resumen no usa fotos ni historial — los excluimos para no
     // descargar los base64 pesados y evitar timeouts de Mongo.
-    const rows = await ClosingEntry.find(filter, { comprobantes: 0, editHistory: 0 }).lean();
+    const rows = await withMongoRetry(
+      () => ClosingEntry.find(filter, { comprobantes: 0, editHistory: 0 }).lean(),
+      { label: 'closings:summary' }
+    );
     const bySector = {};
     for (const r of rows) {
       const c = _closingComputeTotals(r);
@@ -1788,10 +1856,13 @@ app.get('/api/admin/closings/analysis', authMiddleware, closingsAccessMiddleware
       return out;
     }
 
-    const [currentRows, previousRows] = await Promise.all([
-      ClosingEntry.find(buildFilter(curFrom, curTo), { 'comprobantes.url': 0, editHistory: 0 }).lean(),
-      ClosingEntry.find(buildFilter(prevFrom, prevTo), { 'comprobantes.url': 0, editHistory: 0 }).lean()
-    ]);
+    const [currentRows, previousRows] = await withMongoRetry(
+      () => Promise.all([
+        ClosingEntry.find(buildFilter(curFrom, curTo), { 'comprobantes.url': 0, editHistory: 0 }).lean(),
+        ClosingEntry.find(buildFilter(prevFrom, prevTo), { 'comprobantes.url': 0, editHistory: 0 }).lean()
+      ]),
+      { label: 'closings:analysis' }
+    );
 
     const current = aggregate(currentRows);
     const previous = aggregate(previousRows);
