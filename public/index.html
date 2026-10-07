@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#1a0033">
     <meta name="robots" content="noindex, nofollow, noarchive">
     <title>Central ary</title>
-    <link rel="stylesheet" href="/admin.css?v=20260522b">
+    <link rel="stylesheet" href="/admin.css?v=20261007a">
     <link rel="manifest" href="/manifest.json">
     <link rel="icon" type="image/svg+xml" href="/icons/dice.svg">
     <style>
@@ -158,6 +158,10 @@
                     <span>📋</span>
                     <span>Historial Cotización</span>
                 </a>
+                <a href="#" class="nav-item" data-section="financiera" data-protected-pin="closings" style="background:rgba(34,211,238,0.08);border-left:3px solid #22d3ee;">
+                    <span>🏦</span>
+                    <span><strong>FINANCIERA</strong></span>
+                </a>
                 <a href="#" class="nav-item" data-section="empleados" data-protected-pin="empleados" style="background:rgba(155,48,255,0.10);border-left:3px solid #9b30ff;">
                     <span>👥</span>
                     <span><strong>EMPLEADOS</strong></span>
@@ -284,6 +288,29 @@
             <!-- ============================================
                  SECCIÓN: HISTORIAL COTIZACIÓN (sólo externas)
                  ============================================ -->
+            <!-- ============================================
+                 SECCIÓN: FINANCIERA
+                 Cuenta corriente con la financiera: lo bajado en los
+                 cierres de Ganamos + Publicidad vs lo cotizado en los
+                 cortes de las 13 hs. Buffalo queda afuera.
+                 ============================================ -->
+            <section id="financieraSection" class="section">
+                <div class="panel-header">
+                    <h2>🏦 Financiera</h2>
+                    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                        <button class="refresh-btn" onclick="loadFinanciera()" title="Actualizar">🔄</button>
+                    </div>
+                </div>
+                <div style="background:rgba(34,211,238,0.07);border-left:3px solid #22d3ee;padding:10px 12px;margin-bottom:14px;border-radius:6px;">
+                    <p style="margin:0;color:#bbb;font-size:11.5px;line-height:1.55;">
+                        Todo lo bajado en los cierres de <strong>Ganamos + Publicidad</strong> va a la financiera. Cada corte de las 13 hs cargá el precio del USDT y cuántos USDT recibiste: lo cotizado se descuenta y queda lo que la financiera te debe. Buffalo no entra en esta cuenta.
+                    </p>
+                </div>
+                <div id="financieraBody">
+                    <div style="color:#aaa;text-align:center;padding:24px;">⏳ Cargando…</div>
+                </div>
+            </section>
+
             <section id="historialCotizacionSection" class="section">
                 <div class="panel-header">
                     <h2>📋 Historial Cotización</h2>
@@ -517,6 +544,6 @@
 
     <!-- SheetJS para parsear .xlsx en el navegador (recontactación) -->
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-    <script src="/admin.js?v=20260522b"></script>
+    <script src="/admin.js?v=20261007a"></script>
 </body>
 </html>

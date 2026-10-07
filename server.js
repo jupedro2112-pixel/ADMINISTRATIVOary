@@ -2348,6 +2348,210 @@ app.delete(prefix + '/:id', authMiddleware, closingsAccessMiddleware, async (req
 _mountCotizacionRoutes('/api/admin/cotizaciones', 'CotizacionEntry', 'cotizacion');
 _mountCotizacionRoutes('/api/admin/cotizaciones-externo', 'CotizacionExternaEntry', 'cotizacion-externa');
 
+// ============================================
+// FINANCIERA (cuenta corriente con la financiera)
+// ============================================
+// Lo bajado en los cierres de Ganamos + Publicidad se manda a la
+// financiera, que cotiza y corta a las 13 hs. Como los cierres van de
+// 00 a 00 no se empareja corte con día: se lleva como cuenta corriente.
+//   debe = saldo inicial + Σ bajado − Σ (usdtRecibidos × usdtRate)
+// Buffalo queda afuera.
+const FinancieraCorte = require('./src/models/FinancieraCorte');
+const FIN_SECTORS = ['ganamos', 'publicidad'];
+const _finSettingsKey = (req) => 'financiera_settings' + (_tenantOf(req) === 'crazy' ? '__crazy' : '');
+const _isDateKey = (v) => /^\d{4}-\d{2}-\d{2}$/.test(String(v || ''));
+
+async function _finGetSettings(req) {
+  const v = await getConfig(_finSettingsKey(req), null);
+  return {
+    startDate: (v && _isDateKey(v.startDate)) ? v.startDate : null,
+    saldoInicialARS: Number((v && v.saldoInicialARS) || 0)
+  };
+}
+
+function _finCorteOut(c) {
+  const rate = Number(c.usdtRate || 0);
+  const usdt = Number(c.usdtRecibidos || 0);
+  return {
+    id: c.id,
+    dateKey: c.dateKey,
+    usdtRate: rate,
+    usdtRecibidos: usdt,
+    arsCotizado: Math.round(usdt * rate * 100) / 100,
+    nota: c.nota || '',
+    createdBy: c.createdBy || '',
+    createdAt: c.createdAt,
+    updatedAt: c.updatedAt
+  };
+}
+
+// GET /api/admin/financiera — settings + cortes + bajado por día + saldo.
+app.get('/api/admin/financiera', authMiddleware, closingsAccessMiddleware, async (req, res) => {
+  try {
+    const { ClosingEntry, FinancieraCorte: Corte } = _models(req);
+    const settings = await _finGetSettings(req);
+    const today = _closingDateKeyART();
+    const dateFilter = settings.startDate ? { dateKey: { $gte: settings.startDate } } : {};
+
+    const [closings, cortesRaw] = await Promise.all([
+      withMongoRetry(
+        () => ClosingEntry.find(
+          { ...dateFilter, sector: { $in: FIN_SECTORS } },
+          { dateKey: 1, sector: 1, bajadaARS: 1, status: 1 }
+        ).lean(),
+        { label: 'financiera:closings' }
+      ),
+      withMongoRetry(() => Corte.find(dateFilter).sort({ dateKey: 1, createdAt: 1 }).lean(), { label: 'financiera:cortes' })
+    ]);
+    const cortes = cortesRaw.map(_finCorteOut);
+
+    // Una fila por fecha con lo bajado (por sector) y lo cotizado ese día.
+    const byDate = new Map();
+    const row = (dk) => {
+      if (!byDate.has(dk)) {
+        byDate.set(dk, {
+          dateKey: dk, ganamosARS: 0, publicidadARS: 0, bajadoARS: 0,
+          cotizadoARS: 0, usdtRecibidos: 0, sectores: {}
+        });
+      }
+      return byDate.get(dk);
+    };
+    for (const c of closings) {
+      const r = row(c.dateKey);
+      const v = Number(c.bajadaARS || 0);
+      if (c.sector === 'ganamos') r.ganamosARS += v; else r.publicidadARS += v;
+      r.bajadoARS += v;
+      r.sectores[c.sector] = c.status || 'draft';
+    }
+    for (const c of cortes) {
+      const r = row(c.dateKey);
+      r.cotizadoARS += c.arsCotizado;
+      r.usdtRecibidos += c.usdtRecibidos;
+    }
+
+    let saldo = settings.saldoInicialARS;
+    const days = [...byDate.values()].sort((a, b) => a.dateKey.localeCompare(b.dateKey)).map((r) => {
+      saldo += r.bajadoARS - r.cotizadoARS;
+      return {
+        ...r,
+        faltaCierre: FIN_SECTORS.filter((s) => !r.sectores[s]),
+        saldoARS: Math.round(saldo * 100) / 100
+      };
+    });
+
+    const totalBajadoARS = days.reduce((s, d) => s + d.bajadoARS, 0);
+    const totalGanamosARS = days.reduce((s, d) => s + d.ganamosARS, 0);
+    const totalPublicidadARS = days.reduce((s, d) => s + d.publicidadARS, 0);
+    const totalCotizadoARS = cortes.reduce((s, c) => s + c.arsCotizado, 0);
+    const totalUSDT = cortes.reduce((s, c) => s + c.usdtRecibidos, 0);
+    const debeARS = settings.saldoInicialARS + totalBajadoARS - totalCotizadoARS;
+    const lastRate = cortes.length ? cortes[cortes.length - 1].usdtRate : 0;
+
+    res.json({
+      success: true,
+      today,
+      settings,
+      cortes: cortes.slice().reverse(),
+      days: days.reverse(),
+      totals: {
+        saldoInicialARS: settings.saldoInicialARS,
+        totalGanamosARS,
+        totalPublicidadARS,
+        totalBajadoARS,
+        totalCotizadoARS,
+        totalUSDT,
+        precioPromedio: totalUSDT > 0 ? totalCotizadoARS / totalUSDT : 0,
+        debeARS,
+        lastRate,
+        debeUSDTEstimado: lastRate > 0 ? debeARS / lastRate : 0
+      }
+    });
+  } catch (err) {
+    logger.error(`GET /api/admin/financiera: ${err.stack || err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// PUT /api/admin/financiera/settings — fecha de inicio + saldo inicial.
+app.put('/api/admin/financiera/settings', authMiddleware, closingsAccessMiddleware, async (req, res) => {
+  try {
+    const body = req.body || {};
+    const startDate = _isDateKey(body.startDate) ? body.startDate : null;
+    if (!startDate) return res.status(400).json({ error: 'Fecha de inicio inválida' });
+    const saldoInicialARS = Number(body.saldoInicialARS || 0);
+    if (!Number.isFinite(saldoInicialARS)) return res.status(400).json({ error: 'Saldo inicial inválido' });
+    await setConfig(_finSettingsKey(req), { startDate, saldoInicialARS });
+    res.json({ success: true, settings: { startDate, saldoInicialARS } });
+  } catch (err) {
+    logger.error(`PUT /api/admin/financiera/settings: ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+function _finParseCorte(body) {
+  const dateKey = _isDateKey(body.dateKey) ? body.dateKey : null;
+  const usdtRate = Number(body.usdtRate);
+  const usdtRecibidos = Number(body.usdtRecibidos);
+  if (!dateKey) return { error: 'Fecha inválida' };
+  if (!Number.isFinite(usdtRate) || usdtRate <= 0) return { error: 'Precio del USDT inválido' };
+  if (!Number.isFinite(usdtRecibidos) || usdtRecibidos <= 0) return { error: 'USDT recibidos inválido' };
+  return { dateKey, usdtRate, usdtRecibidos, nota: String(body.nota || '').slice(0, 300) };
+}
+
+// POST /api/admin/financiera/cortes — registrar el corte de las 13 hs.
+app.post('/api/admin/financiera/cortes', authMiddleware, closingsAccessMiddleware, async (req, res) => {
+  try {
+    const { FinancieraCorte: Corte } = _models(req);
+    const parsed = _finParseCorte(req.body || {});
+    if (parsed.error) return res.status(400).json({ error: parsed.error });
+    const saved = await Corte.create({
+      id: `fin_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      ...parsed,
+      createdBy: (req.user && req.user.username) || ''
+    });
+    res.json({ success: true, item: _finCorteOut(saved.toObject()) });
+  } catch (err) {
+    logger.error(`POST /api/admin/financiera/cortes: ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// PUT /api/admin/financiera/cortes/:id — corregir un corte.
+app.put('/api/admin/financiera/cortes/:id', authMiddleware, closingsAccessMiddleware, async (req, res) => {
+  try {
+    const { FinancieraCorte: Corte } = _models(req);
+    const parsed = _finParseCorte(req.body || {});
+    if (parsed.error) return res.status(400).json({ error: parsed.error });
+    const updated = await Corte.findOneAndUpdate(
+      { id: String(req.params.id || '') },
+      { $set: { ...parsed, updatedBy: (req.user && req.user.username) || '' } },
+      { new: true }
+    ).lean();
+    if (!updated) return res.status(404).json({ error: 'Corte no encontrado' });
+    res.json({ success: true, item: _finCorteOut(updated) });
+  } catch (err) {
+    logger.error(`PUT /api/admin/financiera/cortes/:id: ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// DELETE /api/admin/financiera/cortes/:id — borra (requiere PIN 1818).
+app.delete('/api/admin/financiera/cortes/:id', authMiddleware, closingsAccessMiddleware, async (req, res) => {
+  try {
+    const { FinancieraCorte: Corte } = _models(req);
+    const pin = String((req.query && req.query.pin) || (req.body && req.body.pin) || '');
+    if (pin !== COT_DELETE_PIN) return res.status(403).json({ error: 'PIN incorrecto' });
+    const id = String(req.params.id || '');
+    const r = await Corte.deleteOne({ id });
+    if (!r.deletedCount) return res.status(404).json({ error: 'Corte no encontrado' });
+    logger.warn(`DELETE financiera corte ${id} by ${req.user && req.user.username}`);
+    res.json({ success: true });
+  } catch (err) {
+    logger.error(`DELETE /api/admin/financiera/cortes/:id: ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
 // GET /api/admin/active-users-count — count de users conectados por socket
 // AHORA. Para el badge verde pulsante en el sidebar del admin. Pollea cada
 // 10s desde el frontend. Súper liviano — solo retorna .size del Map.
@@ -2417,8 +2621,9 @@ const GastoFijoCrazy              = _crazyModel(GastoFijo, 'GastoFijoCrazy', 'ga
 const GastoInternoCrazy           = _crazyModel(GastoInterno, 'GastoInternoCrazy', 'gastosinternos_crazy');
 const GastoFijoClosingCrazy       = _crazyModel(GastoFijoClosing, 'GastoFijoClosingCrazy', 'gastosfijos_closings_crazy');
 const GastoInternoClosingCrazy    = _crazyModel(GastoInternoClosing, 'GastoInternoClosingCrazy', 'gastosinternos_closings_crazy');
+const FinancieraCorteCrazy        = _crazyModel(FinancieraCorte, 'FinancieraCorteCrazy', 'financieracortes_crazy');
 
-const _MODELS_MAIN = { ClosingEntry, CotizacionEntry, CotizacionExternaEntry, EmployeeEntry, EmployeeSectorConfig, EmployeeClosing, Publicista, GastoFijo, GastoInterno, GastoFijoClosing, GastoInternoClosing };
+const _MODELS_MAIN = { ClosingEntry, CotizacionEntry, CotizacionExternaEntry, EmployeeEntry, EmployeeSectorConfig, EmployeeClosing, Publicista, GastoFijo, GastoInterno, GastoFijoClosing, GastoInternoClosing, FinancieraCorte };
 const _MODELS_CRAZY = {
   ClosingEntry: ClosingEntryCrazy,
   CotizacionEntry: CotizacionEntryCrazy,
@@ -2430,7 +2635,8 @@ const _MODELS_CRAZY = {
   GastoFijo: GastoFijoCrazy,
   GastoInterno: GastoInternoCrazy,
   GastoFijoClosing: GastoFijoClosingCrazy,
-  GastoInternoClosing: GastoInternoClosingCrazy
+  GastoInternoClosing: GastoInternoClosingCrazy,
+  FinancieraCorte: FinancieraCorteCrazy
 };
 
 // Tenant del request: 'crazy' para el login crazy, 'main' para el resto.

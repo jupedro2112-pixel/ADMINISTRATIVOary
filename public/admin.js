@@ -447,7 +447,8 @@ function showSection(sectionKey) {
         empleados: 'empleadosSection',
         publicidad: 'publicidadSection',
         gastosFijos: 'gastosFijosSection',
-        gastosInternos: 'gastosInternosSection'
+        gastosInternos: 'gastosInternosSection',
+        financiera: 'financieraSection'
     };
     const sectionId = map[sectionKey];
     if (sectionId) {
@@ -476,6 +477,8 @@ function showSection(sectionKey) {
         loadGastosFijos();
     } else if (sectionKey === 'gastosInternos') {
         loadGastosInternos();
+    } else if (sectionKey === 'financiera') {
+        loadFinanciera();
     }
 }
 
@@ -6467,4 +6470,242 @@ async function borrarPublicista(id) {
     } catch (e) {
         showToast('Error de conexión', 'error');
     }
+}
+
+// ============================================================
+// FINANCIERA — cuenta corriente con la financiera
+// ============================================================
+// Lo bajado en los cierres de Ganamos + Publicidad va a la financiera,
+// que cotiza en los cortes de las 13 hs. Saldo = inicial + bajado − cotizado.
+let _finData = null;
+let _finEditId = null;
+
+function _finFmt(n, dec) {
+    const d = dec == null ? 0 : dec;
+    return Number(n || 0).toLocaleString('es-AR', { minimumFractionDigits: d, maximumFractionDigits: d });
+}
+function _finARS(n) { return '$ ' + _finFmt(n); }
+function _finDate(dk) {
+    const m = String(dk || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    return m ? (m[3] + '/' + m[2] + '/' + m[1]) : String(dk || '');
+}
+
+async function loadFinanciera() {
+    const body = document.getElementById('financieraBody');
+    if (!body) return;
+    body.innerHTML = '<div style="color:#aaa;text-align:center;padding:16px;">⏳ Cargando financiera…</div>';
+    try {
+        const r = await authFetch('/api/admin/financiera');
+        const d = await r.json();
+        if (!r.ok || !d.success) {
+            body.innerHTML = '<div style="color:#ff8080;padding:14px;">❌ ' + escapeHtml(d.error || 'Error') + '</div>';
+            return;
+        }
+        _finData = d;
+        _finEditId = null;
+        _renderFinanciera();
+    } catch (e) {
+        body.innerHTML = '<div style="color:#ff8080;padding:14px;">Error: ' + escapeHtml(e.message || '') + '</div>';
+    }
+}
+
+function _finTile(label, value, sub, color) {
+    return '<div style="flex:1 1 150px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:10px;padding:10px 12px;">' +
+        '<div style="font-size:9.5px;color:#888;text-transform:uppercase;font-weight:700;letter-spacing:0.4px;">' + label + '</div>' +
+        '<div style="font-size:16px;font-weight:900;color:' + (color || '#fff') + ';margin-top:3px;font-variant-numeric:tabular-nums;">' + value + '</div>' +
+        (sub ? '<div style="font-size:10px;color:#888;margin-top:2px;">' + sub + '</div>' : '') +
+        '</div>';
+}
+
+function _renderFinanciera() {
+    const body = document.getElementById('financieraBody');
+    if (!body || !_finData) return;
+    const d = _finData;
+    const t = d.totals || {};
+    const st = d.settings || {};
+    const inp = 'background:#0f172a;border:1px solid rgba(255,255,255,0.15);color:#fff;border-radius:6px;padding:6px 8px;font-size:12px;';
+    const debe = Number(t.debeARS || 0);
+    const debeColor = debe > 0 ? '#22d3ee' : (debe < 0 ? '#ff9f43' : '#66ff99');
+
+    let h = '';
+
+    // Configuración: fecha de inicio + saldo inicial
+    h += '<div style="background:' + (st.startDate ? 'rgba(255,255,255,0.03)' : 'rgba(255,212,121,0.08)') + ';border:1px solid ' + (st.startDate ? 'rgba(255,255,255,0.08)' : 'rgba(255,212,121,0.45)') + ';border-radius:10px;padding:10px 12px;margin-bottom:12px;">';
+    if (!st.startDate) {
+        h += '<div style="color:#ffd479;font-size:11.5px;font-weight:800;margin-bottom:8px;">⚠️ Configurá desde qué fecha se cuenta. Mientras tanto se suman TODOS los cierres cargados.</div>';
+    }
+    h += '<div style="display:flex;gap:10px;align-items:end;flex-wrap:wrap;font-size:11px;color:#aaa;">';
+    h += '<label style="display:flex;flex-direction:column;gap:3px;">Contar desde<input id="finStartDate" type="date" value="' + escapeHtml(st.startDate || d.today || '') + '" style="' + inp + '"></label>';
+    h += '<label style="display:flex;flex-direction:column;gap:3px;" title="Lo que la financiera ya te debía antes de esa fecha">Saldo inicial (ARS)<input id="finSaldoInicial" type="number" step="1" value="' + (Number(st.saldoInicialARS) || 0) + '" style="' + inp + 'width:150px;"></label>';
+    h += '<button type="button" onclick="guardarFinancieraSettings()" style="background:rgba(34,211,238,0.12);color:#22d3ee;border:1px solid rgba(34,211,238,0.45);padding:7px 12px;border-radius:6px;font-weight:800;font-size:11px;cursor:pointer;">💾 Guardar</button>';
+    h += '</div></div>';
+
+    // Saldo principal
+    h += '<div style="background:linear-gradient(135deg,rgba(34,211,238,0.12),rgba(99,102,241,0.12));border:1.5px solid rgba(34,211,238,0.45);border-radius:12px;padding:16px;margin-bottom:12px;">';
+    h += '<div style="font-size:11px;color:#9adfee;font-weight:800;text-transform:uppercase;letter-spacing:0.6px;">' + (debe >= 0 ? 'La financiera te debe' : 'Te cotizaron de más') + '</div>';
+    h += '<div style="font-size:30px;font-weight:900;color:' + debeColor + ';font-variant-numeric:tabular-nums;margin:4px 0;">' + _finARS(Math.abs(debe)) + '</div>';
+    if (t.lastRate > 0) {
+        h += '<div style="font-size:11.5px;color:#aaa;">≈ <strong style="color:#fff;">' + _finFmt(Math.abs(t.debeUSDTEstimado), 2) + ' USDT</strong> al último precio (' + _finARS(t.lastRate) + ')</div>';
+    }
+    h += '</div>';
+
+    h += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">';
+    h += _finTile('Bajado Ganamos', _finARS(t.totalGanamosARS));
+    h += _finTile('Bajado Publicidad', _finARS(t.totalPublicidadARS));
+    h += _finTile('Total enviado', _finARS(t.totalBajadoARS), t.saldoInicialARS ? ('+ saldo inicial ' + _finARS(t.saldoInicialARS)) : '', '#ffd479');
+    h += _finTile('Cotizado', _finARS(t.totalCotizadoARS), _finFmt(t.totalUSDT, 2) + ' USDT recibidos', '#66ff99');
+    h += _finTile('Precio promedio', t.precioPromedio > 0 ? _finARS(t.precioPromedio) : '—', 'ARS por USDT');
+    h += '</div>';
+
+    // Formulario de corte
+    const editing = _finEditId ? (d.cortes || []).find(c => c.id === _finEditId) : null;
+    h += '<div style="background:rgba(102,255,153,0.05);border:1.5px solid rgba(102,255,153,0.35);border-radius:12px;padding:12px 14px;margin-bottom:14px;">';
+    h += '<div style="color:#66ff99;font-weight:900;font-size:13px;margin-bottom:10px;">' + (editing ? '✏️ Editar corte del ' + _finDate(editing.dateKey) : '🕐 Registrar corte de las 13 hs') + '</div>';
+    h += '<div style="display:flex;gap:10px;align-items:end;flex-wrap:wrap;font-size:11px;color:#aaa;">';
+    h += '<label style="display:flex;flex-direction:column;gap:3px;">Fecha<input id="finCorteFecha" type="date" value="' + escapeHtml(editing ? editing.dateKey : (d.today || '')) + '" style="' + inp + '"></label>';
+    h += '<label style="display:flex;flex-direction:column;gap:3px;">Precio USDT (ARS)<input id="finCorteRate" type="number" min="0" step="0.01" value="' + (editing ? editing.usdtRate : '') + '" placeholder="ej: 1250" oninput="_finCortePreview()" style="' + inp + 'width:130px;"></label>';
+    h += '<label style="display:flex;flex-direction:column;gap:3px;">USDT recibidos<input id="finCorteUsdt" type="number" min="0" step="0.01" value="' + (editing ? editing.usdtRecibidos : '') + '" placeholder="ej: 800" oninput="_finCortePreview()" style="' + inp + 'width:130px;"></label>';
+    h += '<label style="display:flex;flex-direction:column;gap:3px;flex:1 1 160px;">Nota<input id="finCorteNota" type="text" maxlength="300" value="' + escapeHtml(editing ? editing.nota : '') + '" placeholder="opcional" style="' + inp + '"></label>';
+    h += '<button type="button" onclick="guardarFinancieraCorte()" style="background:linear-gradient(135deg,#10b981,#66ff99);color:#000;border:none;padding:8px 16px;border-radius:6px;font-weight:900;font-size:12px;cursor:pointer;">' + (editing ? '💾 Guardar cambios' : '➕ Registrar corte') + '</button>';
+    if (editing) {
+        h += '<button type="button" onclick="_finCancelEdit()" style="background:transparent;color:#aaa;border:1px solid rgba(255,255,255,0.2);padding:8px 12px;border-radius:6px;font-size:12px;cursor:pointer;">Cancelar</button>';
+    }
+    h += '</div>';
+    h += '<div id="finCortePreview" style="margin-top:8px;font-size:12px;color:#aaa;min-height:16px;"></div>';
+    h += '</div>';
+
+    // Detalle por día
+    const days = d.days || [];
+    h += '<div style="background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.08);border-radius:12px;padding:12px 14px;margin-bottom:14px;">';
+    h += '<div style="color:#fff;font-weight:900;font-size:13px;margin-bottom:8px;">📅 Detalle por día</div>';
+    if (!days.length) {
+        h += '<div style="color:#888;text-align:center;padding:14px;font-size:12px;">Sin cierres ni cortes en el período.</div>';
+    } else {
+        const th = 'padding:6px 8px;text-align:right;font-size:9.5px;color:#888;text-transform:uppercase;font-weight:700;white-space:nowrap;';
+        const td = 'padding:6px 8px;text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;border-top:1px solid rgba(255,255,255,0.05);';
+        h += '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:12px;min-width:640px;">';
+        h += '<thead><tr><th style="' + th + 'text-align:left;">Fecha</th><th style="' + th + '">Ganamos</th><th style="' + th + '">Publicidad</th><th style="' + th + '">Enviado</th><th style="' + th + '">Cotizado</th><th style="' + th + '">Te debe</th></tr></thead><tbody>';
+        for (const r of days) {
+            const falta = (r.faltaCierre || []);
+            const warn = falta.length ? ' <span title="Falta cierre de ' + escapeHtml(falta.join(' y ')) + '" style="color:#ffd479;">⚠️</span>' : '';
+            h += '<tr>';
+            h += '<td style="' + td + 'text-align:left;color:#ddd;">' + _finDate(r.dateKey) + warn + '</td>';
+            h += '<td style="' + td + 'color:#ccc;">' + (r.sectores && r.sectores.ganamos ? _finARS(r.ganamosARS) : '<span style="color:#666;">—</span>') + '</td>';
+            h += '<td style="' + td + 'color:#ccc;">' + (r.sectores && r.sectores.publicidad ? _finARS(r.publicidadARS) : '<span style="color:#666;">—</span>') + '</td>';
+            h += '<td style="' + td + 'color:#ffd479;font-weight:800;">' + _finARS(r.bajadoARS) + '</td>';
+            h += '<td style="' + td + 'color:#66ff99;">' + (r.cotizadoARS ? '− ' + _finARS(r.cotizadoARS) + '<div style="font-size:9.5px;color:#888;">' + _finFmt(r.usdtRecibidos, 2) + ' USDT</div>' : '<span style="color:#666;">—</span>') + '</td>';
+            h += '<td style="' + td + 'color:#22d3ee;font-weight:900;">' + _finARS(r.saldoARS) + '</td>';
+            h += '</tr>';
+        }
+        h += '</tbody></table></div>';
+        h += '<div style="font-size:10px;color:#777;margin-top:6px;">Los cierres van de 00 a 00 hs y el corte es a las 13 hs, por eso lo bajado a la tarde queda pendiente hasta el corte del día siguiente.</div>';
+    }
+    h += '</div>';
+
+    // Historial de cortes
+    const cortes = d.cortes || [];
+    h += '<div style="background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.08);border-radius:12px;padding:12px 14px;">';
+    h += '<div style="color:#fff;font-weight:900;font-size:13px;margin-bottom:8px;">🧾 Cortes registrados</div>';
+    if (!cortes.length) {
+        h += '<div style="color:#888;text-align:center;padding:14px;font-size:12px;">Todavía no registraste ningún corte.</div>';
+    } else {
+        const th = 'padding:6px 8px;text-align:right;font-size:9.5px;color:#888;text-transform:uppercase;font-weight:700;white-space:nowrap;';
+        const td = 'padding:6px 8px;text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;border-top:1px solid rgba(255,255,255,0.05);';
+        h += '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:12px;min-width:640px;">';
+        h += '<thead><tr><th style="' + th + 'text-align:left;">Fecha</th><th style="' + th + '">Precio USDT</th><th style="' + th + '">USDT</th><th style="' + th + '">ARS cotizados</th><th style="' + th + 'text-align:left;">Nota</th><th style="' + th + '"></th></tr></thead><tbody>';
+        for (const c of cortes) {
+            const cid = escapeHtml(c.id);
+            h += '<tr>';
+            h += '<td style="' + td + 'text-align:left;color:#ddd;">' + _finDate(c.dateKey) + (c.createdBy ? '<div style="font-size:9.5px;color:#777;">' + escapeHtml(c.createdBy) + '</div>' : '') + '</td>';
+            h += '<td style="' + td + 'color:#ccc;">' + _finARS(c.usdtRate) + '</td>';
+            h += '<td style="' + td + 'color:#fff;font-weight:800;">' + _finFmt(c.usdtRecibidos, 2) + '</td>';
+            h += '<td style="' + td + 'color:#66ff99;font-weight:800;">' + _finARS(c.arsCotizado) + '</td>';
+            h += '<td style="' + td + 'text-align:left;color:#aaa;white-space:normal;">' + escapeHtml(c.nota || '') + '</td>';
+            h += '<td style="' + td + '"><button type="button" onclick="_finStartEdit(\'' + cid + '\')" title="Editar" style="background:rgba(34,211,238,0.10);color:#22d3ee;border:1px solid rgba(34,211,238,0.30);border-radius:5px;cursor:pointer;font-size:11px;padding:3px 7px;margin-right:4px;">✏️</button>' +
+                '<button type="button" onclick="borrarFinancieraCorte(\'' + cid + '\')" title="Borrar (PIN 1818)" style="background:rgba(255,80,80,0.10);color:#f55;border:1px solid rgba(255,80,80,0.30);border-radius:5px;cursor:pointer;font-size:11px;padding:3px 7px;">✕</button></td>';
+            h += '</tr>';
+        }
+        h += '</tbody></table></div>';
+    }
+    h += '</div>';
+
+    body.innerHTML = h;
+    _finCortePreview();
+}
+
+function _finCortePreview() {
+    const el = document.getElementById('finCortePreview');
+    if (!el) return;
+    const rate = Number(document.getElementById('finCorteRate')?.value) || 0;
+    const usdt = Number(document.getElementById('finCorteUsdt')?.value) || 0;
+    if (!(rate > 0 && usdt > 0)) { el.innerHTML = ''; return; }
+    const ars = rate * usdt;
+    let debe = Number((_finData && _finData.totals && _finData.totals.debeARS) || 0) - ars;
+    if (_finEditId) {
+        const prev = ((_finData && _finData.cortes) || []).find(c => c.id === _finEditId);
+        if (prev) debe += prev.arsCotizado;
+    }
+    el.innerHTML = 'Cotiza <strong style="color:#66ff99;">' + _finARS(ars) + '</strong> · después de este corte te deben <strong style="color:#22d3ee;">' + _finARS(debe) + '</strong>';
+}
+
+function _finStartEdit(id) {
+    _finEditId = id;
+    _renderFinanciera();
+    document.getElementById('finCorteRate')?.focus();
+}
+function _finCancelEdit() { _finEditId = null; _renderFinanciera(); }
+
+async function guardarFinancieraCorte() {
+    const payload = {
+        dateKey: document.getElementById('finCorteFecha')?.value || '',
+        usdtRate: Number(document.getElementById('finCorteRate')?.value) || 0,
+        usdtRecibidos: Number(document.getElementById('finCorteUsdt')?.value) || 0,
+        nota: document.getElementById('finCorteNota')?.value || ''
+    };
+    if (!payload.dateKey) { showToast('Elegí la fecha del corte', 'error'); return; }
+    if (!(payload.usdtRate > 0)) { showToast('Cargá el precio del USDT', 'error'); return; }
+    if (!(payload.usdtRecibidos > 0)) { showToast('Cargá los USDT recibidos', 'error'); return; }
+    const url = '/api/admin/financiera/cortes' + (_finEditId ? '/' + encodeURIComponent(_finEditId) : '');
+    try {
+        const r = await authFetch(url, {
+            method: _finEditId ? 'PUT' : 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        const d = await r.json();
+        if (!r.ok || !d.success) { showToast(d.error || 'Error', 'error'); return; }
+        showToast(_finEditId ? '✅ Corte actualizado' : '✅ Corte registrado', 'success');
+        loadFinanciera();
+    } catch (e) { showToast('Error de conexión', 'error'); }
+}
+
+async function borrarFinancieraCorte(id) {
+    const c = ((_finData && _finData.cortes) || []).find(x => x.id === id);
+    if (!confirm('¿Borrar el corte del ' + (c ? _finDate(c.dateKey) : '') + '?')) return;
+    const pin = prompt('PIN para borrar:');
+    if (pin == null) return;
+    if (!pin) { showToast('PIN requerido', 'error'); return; }
+    try {
+        const r = await authFetch('/api/admin/financiera/cortes/' + encodeURIComponent(id) + '?pin=' + encodeURIComponent(pin), { method: 'DELETE' });
+        const d = await r.json();
+        if (!r.ok || !d.success) { showToast(d.error || 'Error', 'error'); return; }
+        showToast('🗑 Corte borrado', 'success');
+        loadFinanciera();
+    } catch (e) { showToast('Error de conexión', 'error'); }
+}
+
+async function guardarFinancieraSettings() {
+    const startDate = document.getElementById('finStartDate')?.value || '';
+    const saldoInicialARS = Number(document.getElementById('finSaldoInicial')?.value) || 0;
+    if (!startDate) { showToast('Elegí la fecha de inicio', 'error'); return; }
+    try {
+        const r = await authFetch('/api/admin/financiera/settings', {
+            method: 'PUT', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ startDate, saldoInicialARS })
+        });
+        const d = await r.json();
+        if (!r.ok || !d.success) { showToast(d.error || 'Error', 'error'); return; }
+        showToast('✅ Configuración guardada', 'success');
+        loadFinanciera();
+    } catch (e) { showToast('Error de conexión', 'error'); }
 }
