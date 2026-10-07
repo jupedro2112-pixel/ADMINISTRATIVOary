@@ -1,6 +1,6 @@
 {
-  "name": "Central Control",
-  "short_name": "Central Control",
+  "name": "Central ary",
+  "short_name": "Central ary",
   "description": "Panel administrativo de Cierres",
   "start_url": "/",
   "display": "standalone",

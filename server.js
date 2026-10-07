@@ -425,7 +425,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// La pagina principal sirve el panel Central Control.
+// La pagina principal sirve el panel Central ary.
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
@@ -533,7 +533,7 @@ app.get('/api/health', async (req, res) => {
 });
 
 // Login
-// Credenciales fijas de Central Control. Se ignoran a propósito las env
+// Credenciales fijas de Central ary. Se ignoran a propósito las env
 // vars ADMIN_USERNAME / ADMIN_PASSWORD para que el acceso sea siempre el
 // mismo y no dependa de la configuración en Render.
 // Los dos son admin con panel completo, pero cada uno trabaja sobre su
@@ -565,7 +565,7 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
     const token = jwt.sign(payload, JWT_SECRET, { expiresIn: '30d' });
     const cookieToken = jwt.sign(payload, JWT_SECRET, { expiresIn: '8h' });
     res.setHeader('Set-Cookie', buildAdminSessionCookieHeaders(cookieToken));
-    logger.info(`[login] Acceso a Central Control: ${matched.username} (${matched.role})`);
+    logger.info(`[login] Acceso a Central ary: ${matched.username} (${matched.role})`);
     res.json({
       message: 'Login exitoso',
       token,
