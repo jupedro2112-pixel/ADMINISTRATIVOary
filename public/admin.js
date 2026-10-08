@@ -6479,6 +6479,7 @@ async function borrarPublicista(id) {
 // que cotiza en los cortes de las 13 hs. Saldo = inicial + bajado − cotizado.
 let _finData = null;
 let _finEditId = null;
+let _finRange = { from: '', to: '' };
 
 function _finFmt(n, dec) {
     const d = dec == null ? 0 : dec;
@@ -6495,7 +6496,10 @@ async function loadFinanciera() {
     if (!body) return;
     body.innerHTML = '<div style="color:#aaa;text-align:center;padding:16px;">⏳ Cargando financiera…</div>';
     try {
-        const r = await authFetch('/api/admin/financiera');
+        const qs = new URLSearchParams();
+        if (_finRange.from) qs.set('from', _finRange.from);
+        if (_finRange.to) qs.set('to', _finRange.to);
+        const r = await authFetch('/api/admin/financiera' + (qs.toString() ? '?' + qs.toString() : ''));
         const d = await r.json();
         if (!r.ok || !d.success) {
             body.innerHTML = '<div style="color:#ff8080;padding:14px;">❌ ' + escapeHtml(d.error || 'Error') + '</div>';
@@ -6540,9 +6544,19 @@ function _renderFinanciera() {
     h += '<button type="button" onclick="guardarFinancieraSettings()" style="background:rgba(34,211,238,0.12);color:#22d3ee;border:1px solid rgba(34,211,238,0.45);padding:7px 12px;border-radius:6px;font-weight:800;font-size:11px;cursor:pointer;">💾 Guardar</button>';
     h += '</div></div>';
 
+    // Filtro entre fechas (el saldo se sigue acumulando desde la fecha de inicio)
+    h += '<div style="display:flex;gap:10px;align-items:end;flex-wrap:wrap;font-size:11px;color:#aaa;margin-bottom:12px;">';
+    h += '<label style="display:flex;flex-direction:column;gap:3px;">Ver desde<input id="finFrom" type="date" value="' + escapeHtml(d.from || '') + '" min="' + escapeHtml(st.startDate || '') + '" style="' + inp + '"></label>';
+    h += '<label style="display:flex;flex-direction:column;gap:3px;">Hasta<input id="finTo" type="date" value="' + escapeHtml(d.to || '') + '" style="' + inp + '"></label>';
+    h += '<button type="button" onclick="_finAplicarRango()" style="background:rgba(34,211,238,0.12);color:#22d3ee;border:1px solid rgba(34,211,238,0.45);padding:7px 12px;border-radius:6px;font-weight:800;font-size:11px;cursor:pointer;">🔎 Filtrar</button>';
+    h += '<button type="button" onclick="_finRangoRapido(\'mes\')" style="background:transparent;color:#ccc;border:1px solid rgba(255,255,255,0.2);padding:7px 10px;border-radius:6px;font-size:11px;cursor:pointer;">Este mes</button>';
+    h += '<button type="button" onclick="_finRangoRapido(\'todo\')" style="background:transparent;color:#ccc;border:1px solid rgba(255,255,255,0.2);padding:7px 10px;border-radius:6px;font-size:11px;cursor:pointer;">Todo</button>';
+    h += '</div>';
+
     // Saldo principal
     h += '<div style="background:linear-gradient(135deg,rgba(34,211,238,0.12),rgba(99,102,241,0.12));border:1.5px solid rgba(34,211,238,0.45);border-radius:12px;padding:16px;margin-bottom:12px;">';
-    h += '<div style="font-size:11px;color:#9adfee;font-weight:800;text-transform:uppercase;letter-spacing:0.6px;">' + (debe >= 0 ? 'La financiera te debe' : 'Te cotizaron de más') + '</div>';
+    const alCorte = (d.to && d.to !== d.today) ? ' al ' + _finDate(d.to) : '';
+    h += '<div style="font-size:11px;color:#9adfee;font-weight:800;text-transform:uppercase;letter-spacing:0.6px;">' + (debe >= 0 ? (alCorte ? 'La financiera te debía' : 'La financiera te debe') : 'Te cotizaron de más') + alCorte + '</div>';
     h += '<div style="font-size:30px;font-weight:900;color:' + debeColor + ';font-variant-numeric:tabular-nums;margin:4px 0;">' + _finARS(Math.abs(debe)) + '</div>';
     if (t.lastRate > 0) {
         h += '<div style="font-size:11.5px;color:#aaa;">≈ <strong style="color:#fff;">' + _finFmt(Math.abs(t.debeUSDTEstimado), 2) + ' USDT</strong> al último precio (' + _finARS(t.lastRate) + ')</div>';
@@ -6552,7 +6566,8 @@ function _renderFinanciera() {
     h += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">';
     h += _finTile('Bajado Ganamos', _finARS(t.totalGanamosARS));
     h += _finTile('Bajado Publicidad', _finARS(t.totalPublicidadARS));
-    h += _finTile('Total enviado', _finARS(t.totalBajadoARS), t.saldoInicialARS ? ('+ saldo inicial ' + _finARS(t.saldoInicialARS)) : '', '#ffd479');
+    if (t.saldoAntesARS) h += _finTile(d.from && d.from !== st.startDate ? 'Saldo al ' + _finDate(d.from) : 'Saldo inicial', _finARS(t.saldoAntesARS), 'lo que ya debían', '#9adfee');
+    h += _finTile('Total enviado', _finARS(t.totalBajadoARS), 'en el período', '#ffd479');
     h += _finTile('Cotizado', _finARS(t.totalCotizadoARS), _finFmt(t.totalUSDT, 2) + ' USDT recibidos', '#66ff99');
     h += _finTile('Precio promedio', t.precioPromedio > 0 ? _finARS(t.precioPromedio) : '—', 'ARS por USDT');
     h += '</div>';
@@ -6654,6 +6669,21 @@ function _finStartEdit(id) {
     document.getElementById('finCorteRate')?.focus();
 }
 function _finCancelEdit() { _finEditId = null; _renderFinanciera(); }
+
+function _finAplicarRango() {
+    _finRange = {
+        from: document.getElementById('finFrom')?.value || '',
+        to: document.getElementById('finTo')?.value || ''
+    };
+    if (_finRange.from && _finRange.to && _finRange.from > _finRange.to) { showToast('La fecha desde es mayor que la hasta', 'error'); return; }
+    loadFinanciera();
+}
+
+function _finRangoRapido(tipo) {
+    const today = (_finData && _finData.today) || '';
+    _finRange = tipo === 'mes' && today ? { from: today.slice(0, 8) + '01', to: today } : { from: '', to: '' };
+    loadFinanciera();
+}
 
 async function guardarFinancieraCorte() {
     const payload = {

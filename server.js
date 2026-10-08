@@ -2385,13 +2385,21 @@ function _finCorteOut(c) {
   };
 }
 
-// GET /api/admin/financiera — settings + cortes + bajado por día + saldo.
+// GET /api/admin/financiera?from=&to= — settings + cortes + bajado por día + saldo.
+// El saldo siempre se acumula desde la fecha de inicio de la cuenta; from/to
+// sólo recortan qué días/cortes se muestran y los totales del período.
 app.get('/api/admin/financiera', authMiddleware, closingsAccessMiddleware, async (req, res) => {
   try {
     const { ClosingEntry, FinancieraCorte: Corte } = _models(req);
     const settings = await _finGetSettings(req);
     const today = _closingDateKeyART();
-    const dateFilter = settings.startDate ? { dateKey: { $gte: settings.startDate } } : {};
+    const to = _isDateKey(req.query.to) ? req.query.to : today;
+    let from = _isDateKey(req.query.from) ? req.query.from : (settings.startDate || null);
+    if (settings.startDate && from && from < settings.startDate) from = settings.startDate;
+    const inRange = (dk) => (!from || dk >= from) && dk <= to;
+
+    const dateFilter = { dateKey: { $lte: to } };
+    if (settings.startDate) dateFilter.dateKey.$gte = settings.startDate;
 
     const [closings, cortesRaw] = await Promise.all([
       withMongoRetry(
@@ -2403,7 +2411,7 @@ app.get('/api/admin/financiera', authMiddleware, closingsAccessMiddleware, async
       ),
       withMongoRetry(() => Corte.find(dateFilter).sort({ dateKey: 1, createdAt: 1 }).lean(), { label: 'financiera:cortes' })
     ]);
-    const cortes = cortesRaw.map(_finCorteOut);
+    const cortesAll = cortesRaw.map(_finCorteOut);
 
     // Una fila por fecha con lo bajado (por sector) y lo cotizado ese día.
     const byDate = new Map();
@@ -2423,14 +2431,16 @@ app.get('/api/admin/financiera', authMiddleware, closingsAccessMiddleware, async
       r.bajadoARS += v;
       r.sectores[c.sector] = c.status || 'draft';
     }
-    for (const c of cortes) {
+    for (const c of cortesAll) {
       const r = row(c.dateKey);
       r.cotizadoARS += c.arsCotizado;
       r.usdtRecibidos += c.usdtRecibidos;
     }
 
     let saldo = settings.saldoInicialARS;
-    const days = [...byDate.values()].sort((a, b) => a.dateKey.localeCompare(b.dateKey)).map((r) => {
+    let saldoAntesARS = settings.saldoInicialARS;
+    const allDays = [...byDate.values()].sort((a, b) => a.dateKey.localeCompare(b.dateKey)).map((r) => {
+      if (from && r.dateKey < from) saldoAntesARS += r.bajadoARS - r.cotizadoARS;
       saldo += r.bajadoARS - r.cotizadoARS;
       return {
         ...r,
@@ -2438,23 +2448,30 @@ app.get('/api/admin/financiera', authMiddleware, closingsAccessMiddleware, async
         saldoARS: Math.round(saldo * 100) / 100
       };
     });
+    const days = allDays.filter((d) => inRange(d.dateKey));
+    const cortes = cortesAll.filter((c) => inRange(c.dateKey));
 
     const totalBajadoARS = days.reduce((s, d) => s + d.bajadoARS, 0);
     const totalGanamosARS = days.reduce((s, d) => s + d.ganamosARS, 0);
     const totalPublicidadARS = days.reduce((s, d) => s + d.publicidadARS, 0);
     const totalCotizadoARS = cortes.reduce((s, c) => s + c.arsCotizado, 0);
     const totalUSDT = cortes.reduce((s, c) => s + c.usdtRecibidos, 0);
-    const debeARS = settings.saldoInicialARS + totalBajadoARS - totalCotizadoARS;
-    const lastRate = cortes.length ? cortes[cortes.length - 1].usdtRate : 0;
+    // Saldo al final del período (si `to` es hoy, es lo que debe ahora).
+    const debeARS = saldoAntesARS + totalBajadoARS - totalCotizadoARS;
+    const lastCorte = cortesAll.length ? cortesAll[cortesAll.length - 1] : null;
+    const lastRate = lastCorte ? lastCorte.usdtRate : 0;
 
     res.json({
       success: true,
       today,
+      from,
+      to,
       settings,
       cortes: cortes.slice().reverse(),
       days: days.reverse(),
       totals: {
         saldoInicialARS: settings.saldoInicialARS,
+        saldoAntesARS,
         totalGanamosARS,
         totalPublicidadARS,
         totalBajadoARS,
