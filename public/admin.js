@@ -6539,7 +6539,7 @@ function _renderFinanciera() {
         h += '<div style="color:#ffd479;font-size:11.5px;font-weight:800;margin-bottom:8px;">⚠️ Configurá desde qué fecha se cuenta. Mientras tanto se suman TODOS los cierres cargados.</div>';
     }
     h += '<div style="display:flex;gap:10px;align-items:end;flex-wrap:wrap;font-size:11px;color:#aaa;">';
-    h += '<label style="display:flex;flex-direction:column;gap:3px;">Contar desde<input id="finStartDate" type="date" value="' + escapeHtml(st.startDate || d.today || '') + '" style="' + inp + '"></label>';
+    h += '<label style="display:flex;flex-direction:column;gap:3px;">Contar desde<input id="finStartDate" type="date" min="2026-10-01" value="' + escapeHtml(st.startDate || d.today || '') + '" style="' + inp + '"></label>';
     h += '<label style="display:flex;flex-direction:column;gap:3px;" title="Lo que la financiera ya te debía antes de esa fecha">Saldo inicial (ARS)<input id="finSaldoInicial" type="number" step="1" value="' + (Number(st.saldoInicialARS) || 0) + '" style="' + inp + 'width:150px;"></label>';
     h += '<button type="button" onclick="guardarFinancieraSettings()" style="background:rgba(34,211,238,0.12);color:#22d3ee;border:1px solid rgba(34,211,238,0.45);padding:7px 12px;border-radius:6px;font-weight:800;font-size:11px;cursor:pointer;">💾 Guardar</button>';
     h += '</div></div>';

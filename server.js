@@ -2358,13 +2358,15 @@ _mountCotizacionRoutes('/api/admin/cotizaciones-externo', 'CotizacionExternaEntr
 // Buffalo queda afuera.
 const FinancieraCorte = require('./src/models/FinancieraCorte');
 const FIN_SECTORS = ['ganamos', 'publicidad'];
+// La cuenta con la financiera arranca en octubre 2026: lo anterior no cuenta.
+const FIN_MIN_DATE = '2026-10-01';
 const _finSettingsKey = (req) => 'financiera_settings' + (_tenantOf(req) === 'crazy' ? '__crazy' : '');
 const _isDateKey = (v) => /^\d{4}-\d{2}-\d{2}$/.test(String(v || ''));
 
 async function _finGetSettings(req) {
   const v = await getConfig(_finSettingsKey(req), null);
   return {
-    startDate: (v && _isDateKey(v.startDate)) ? v.startDate : null,
+    startDate: (v && _isDateKey(v.startDate) && v.startDate > FIN_MIN_DATE) ? v.startDate : FIN_MIN_DATE,
     saldoInicialARS: Number((v && v.saldoInicialARS) || 0)
   };
 }
@@ -2495,6 +2497,7 @@ app.put('/api/admin/financiera/settings', authMiddleware, closingsAccessMiddlewa
     const body = req.body || {};
     const startDate = _isDateKey(body.startDate) ? body.startDate : null;
     if (!startDate) return res.status(400).json({ error: 'Fecha de inicio inválida' });
+    if (startDate < FIN_MIN_DATE) return res.status(400).json({ error: 'La cuenta arranca el 01/10/2026: no se puede contar desde antes' });
     const saldoInicialARS = Number(body.saldoInicialARS || 0);
     if (!Number.isFinite(saldoInicialARS)) return res.status(400).json({ error: 'Saldo inicial inválido' });
     await setConfig(_finSettingsKey(req), { startDate, saldoInicialARS });
